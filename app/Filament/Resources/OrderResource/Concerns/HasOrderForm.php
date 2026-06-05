@@ -133,13 +133,11 @@ trait HasOrderForm
                 ]),
 
             // ── CARD 2: Proveedor y condición de pago ─────────────────────
-            Section::make('2. Proveedor y condición de pago')
+            Section::make('2. Proveedor')
                 ->compact()
                 ->disabled(!$canEditSection23)
                 ->description('RUC, cuenta destino y términos comerciales')
-                ->schema([
-                    Section::make('Proveedor')->compact()
-                        ->headerActions([
+                ->headerActions([
                             FormAction::make('registerSupplier')
                                 ->label('Registrar nuevo proveedor')
                                 ->color('warning')
@@ -241,9 +239,68 @@ trait HasOrderForm
                                 }),
                         ])
                         ->schema([
-                        Hidden::make('supplier_id')->default(null),
+                            Hidden::make('supplier_id')->default(null),
                         Hidden::make('supplier_not_found')->default(false),
-
+                        Hidden::make('supplier_edit_account_id'),
+                    ])
+                    ->headerActions([
+                        FormAction::make('editSupplierAccount')
+                            ->label('Editar cuenta')
+                            ->icon('heroicon-o-pencil')
+                            ->color('gray')
+                            ->visible(fn ($get) => (bool) $get('supplier_edit_account_id'))
+                            ->modalHeading('Editar cuenta bancaria')
+                            ->modalSubmitActionLabel('Guardar cambios')
+                            ->fillForm(function ($get): array {
+                                $account = SupplierAccount::find($get('supplier_edit_account_id'));
+                                if (!$account) return [];
+                                $bankMaster = Master::where('main', 67)->where('description', $account->bank)->first();
+                                return [
+                                    'edit_bank'           => $bankMaster?->id,
+                                    'edit_currency'       => $account->currency,
+                                    'edit_account_number' => $account->account_number,
+                                    'edit_cci'            => $account->cci,
+                                    'edit_is_primary'     => (bool) $account->is_primary,
+                                ];
+                            })
+                            ->form([
+                                Grid::make(2)->schema([
+                                    Select::make('edit_bank')
+                                        ->label('Banco')
+                                        ->options(Master::where('main', 67)->orderBy('description')->pluck('description', 'id'))
+                                        ->required()->searchable(),
+                                    Select::make('edit_currency')
+                                        ->label('Moneda')
+                                        ->options(['PEN' => 'Soles (PEN)', 'USD' => 'Dólares (USD)'])
+                                        ->required(),
+                                ]),
+                                Grid::make(2)->schema([
+                                    TextInput::make('edit_account_number')->label('N° de cuenta')->required(),
+                                    TextInput::make('edit_cci')->label('CCI (interbancario)'),
+                                ]),
+                                Toggle::make('edit_is_primary')->label('Marcar como cuenta principal'),
+                            ])
+                            ->action(function (array $data, Get $get, Set $set): void {
+                                $account = SupplierAccount::find($get('supplier_edit_account_id'));
+                                if ($account) {
+                                    $bankName = Master::find($data['edit_bank'])?->description ?? $data['edit_bank'];
+                                    $account->update([
+                                        'bank'           => $bankName,
+                                        'currency'       => $data['edit_currency'],
+                                        'account_number' => $data['edit_account_number'],
+                                        'cci'            => $data['edit_cci'] ?? null,
+                                        'is_primary'     => (bool) ($data['edit_is_primary'] ?? false),
+                                        'updated_by'     => auth()->id(),
+                                    ]);
+                                    $set('supplier_edit_account_id', null);
+                                    \Filament\Notifications\Notification::make()
+                                        ->title('Cuenta actualizada')
+                                        ->success()
+                                        ->send();
+                                }
+                            }),
+                    ])
+                    ->schema([
                         Grid::make(3)->schema([
                             TextInput::make('ruc_search')
                                 ->label('RUC')
@@ -313,272 +370,69 @@ trait HasOrderForm
                                 ->extraInputAttributes(['style' => 'background:#f1f5f9;color:#475569;cursor:not-allowed;']),
                         ])->hidden(fn ($get) => !$get('supplier_id')),
 
-                        Radio::make('supplier_account_id')
+                        Hidden::make('supplier_account_id'),
+
+                        Placeholder::make('_supplier_accounts_table')
                             ->label('Cuentas bancarias')
-                            ->hint('selecciona destino del pago')
-                            ->hintColor('gray')
-                            ->required(fn ($get) => (bool) $get('supplier_id'))
-                            ->live()
-                            ->hintAction(
-                                FormAction::make('editAccount')
-                                    ->label('Editar')
-                                    ->icon('heroicon-o-pencil')
-                                    ->color('gray')
-                                    ->visible(fn ($get) => (bool) $get('supplier_account_id') && (
-                                        ($user->user_type === 'AA' && $orderStatus === 1) ||
-                                        $user->user_type === 'GA'
-                                    ))
-                                    ->modalHeading('Editar cuenta bancaria')
-                                    ->modalSubmitActionLabel('Guardar cambios')
-                                    ->fillForm(function ($get): array {
-                                        $account = SupplierAccount::find($get('supplier_account_id'));
-                                        if (!$account) return [];
-                                        $bankMaster = Master::where('main', 67)->where('description', $account->bank)->first();
-                                        return [
-                                            'bank'           => $bankMaster?->id,
-                                            'currency'       => $account->currency,
-                                            'account_number' => $account->account_number,
-                                            'cci'            => $account->cci,
-                                            'is_primary'     => (bool) $account->is_primary,
-                                        ];
-                                    })
-                                    ->form([
-                                        Grid::make(2)->schema([
-                                            Select::make('bank')
-                                                ->label('Banco')
-                                                ->options(Master::where('main', 67)->orderBy('description')->pluck('description', 'id'))
-                                                ->required()->searchable(),
-                                            Select::make('currency')
-                                                ->label('Moneda')
-                                                ->options(['PEN' => 'Soles (PEN)', 'USD' => 'Dólares (USD)'])
-                                                ->required(),
-                                        ]),
-                                        Grid::make(2)->schema([
-                                            TextInput::make('account_number')->label('N° de cuenta')->required(),
-                                            TextInput::make('cci')->label('CCI (interbancario)'),
-                                        ]),
-                                        Toggle::make('is_primary')->label('Marcar como cuenta principal'),
-                                    ])
-                                    ->action(function (array $data, $get): void {
-                                        $account = SupplierAccount::find($get('supplier_account_id'));
-                                        if ($account) {
-                                            $bankName = Master::find($data['bank'])?->description ?? $data['bank'];
-                                            $account->update([
-                                                'bank'           => $bankName,
-                                                'currency'       => $data['currency'],
-                                                'account_number' => $data['account_number'],
-                                                'cci'            => $data['cci'] ?? null,
-                                                'is_primary'     => (bool) ($data['is_primary'] ?? false),
-                                                'updated_by'     => auth()->id(),
-                                            ]);
-                                        }
-                                    })
-                            )
-                            ->options(fn ($get) => $get('supplier_id')
-                                ? SupplierAccount::where('supplier_id', $get('supplier_id'))
-                                    ->get()
-                                    ->mapWithKeys(fn ($a) => [
-                                        $a->id => new HtmlString(
-                                            '<span style="font-weight:600;color:#1e293b">' . e($a->bank) . '</span>'
-                                            . '&nbsp;&nbsp;<span style="display:inline-flex;align-items:center;gap:4px;vertical-align:middle">'
-                                            . '<span style="background:#dbeafe;color:#1d4ed8;font-size:11px;padding:1px 7px;border-radius:4px;font-weight:700">' . e($a->currency) . '</span>'
-                                            . ($a->is_primary ? '<span style="background:#d1fae5;color:#065f46;font-size:11px;padding:1px 7px;border-radius:4px;font-weight:700">PRINCIPAL</span>' : '')
-                                            . '</span>'
-                                            . '&nbsp;&nbsp;<span style="color:#64748b;font-size:0.8rem">N° ' . e($a->account_number) . ($a->cci ? ' &nbsp;·&nbsp; CCI ' . e($a->cci) : '') . '</span>'
-                                        ),
-                                    ])
-                                : [])
-                            ->hidden(fn ($get) => !$get('supplier_id')),
-
-                    ]),
-
-                    Section::make('Condición de pago')->compact()->schema([
-                        Grid::make(9)->schema([
-                            Select::make('payment_id')
-                                ->label('Forma de pago')
-                                ->options($paymentOpts)->searchable()->required()
-                                ->columnSpan(2),
-
-                            Select::make('condition_payment')
-                                ->label('Condición')
-                                ->options($conditionOpts)->searchable()->required()
-                                ->live()
-                                ->columnSpan(2),
-
-                            TextInput::make('quotas')
-                                ->label('N° de cuotas')
-                                ->numeric()->default(1)->minValue(1)->required()
-                                ->disabled()
-                                ->columnSpan(1)
-                                ->dehydrated(true),
-
-                            DatePicker::make('expiration_date')
-                                ->label('Fecha de vencimiento')
-                                ->required(fn ($get) => !$this->isConditionFraccionado($get('condition_payment'), $conditionOpts))
-                                ->columnSpan(2),
-
-                            Select::make('payment_schedule_id')
-                                ->label('Programación')
-                                ->options(PaymentSchedule::orderBy('name')->pluck('name', 'id'))
-                                ->searchable()->required()
-                                ->columnSpan(2),
-                        ]),
-
-                        Hidden::make('plan_cuotas'),
-
-                        Placeholder::make('_plan_cuotas_placeholder')
-                            ->label('Plan de cuotas configurado')
-                            ->content(function ($get) use ($conditionOpts) {
-                                if (!$this->isConditionFraccionado($get('condition_payment'), $conditionOpts)) {
-                                    return new HtmlString('<span style="color:#94a3b8;font-style:italic">No aplicable para esta condición</span>');
+                            ->content(function ($get) {
+                                $supplier_id = $get('supplier_id');
+                                if (!$supplier_id) {
+                                    return new HtmlString('<span style="color:#94a3b8;font-style:italic">Selecciona un proveedor primero</span>');
                                 }
 
-                                $planCuotas = $get('plan_cuotas');
-                                if (is_string($planCuotas)) {
-                                    $planCuotas = json_decode($planCuotas, true) ?? [];
+                                $accounts = SupplierAccount::where('supplier_id', $supplier_id)->get();
+                                $selected = $get('supplier_account_id');
+
+                                if ($accounts->isEmpty()) {
+                                    return new HtmlString('<span style="color:#94a3b8;font-style:italic">Sin cuentas registradas</span>');
                                 }
 
-                                if (empty($planCuotas)) {
-                                    return new HtmlString('<span style="color:#94a3b8;font-style:italic">Sin configurar aún. Haz clic en "Configurar cuotas" →</span>');
-                                }
+                                $html = '<div class="overflow-x-auto rounded-lg border border-gray-200" style="max-width:100%;width:100%">';
+                                $html .= '<table class="w-full divide-y divide-gray-200" style="table-layout:auto">';
+                                $html .= '<thead class="bg-gray-50">';
+                                $html .= '<tr>';
+                                $html .= '<th style="padding:8px 12px;text-align:left;text-xs font-medium text-gray-700 uppercase"></th>';
+                                $html .= '<th style="padding:8px 12px;text-align:left;text-xs font-medium text-gray-700 uppercase">Banco</th>';
+                                $html .= '<th style="padding:8px 12px;text-align:left;text-xs font-medium text-gray-700 uppercase">Moneda</th>';
+                                $html .= '<th style="padding:8px 12px;text-align:left;text-xs font-medium text-gray-700 uppercase">Número de cuenta</th>';
+                                $html .= '<th style="padding:8px 12px;text-align:left;text-xs font-medium text-gray-700 uppercase">CCI</th>';
+                                $html .= '<th style="padding:8px 12px;text-center;text-xs font-medium text-gray-700 uppercase">Principal</th>';
+                                $html .= '<th style="padding:8px 12px;text-center;text-xs font-medium text-gray-700 uppercase">Acción</th>';
+                                $html .= '</tr>';
+                                $html .= '</thead>';
+                                $html .= '<tbody class="divide-y divide-gray-200 bg-white">';
 
-                                $html = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem">';
-                                $html .= '<thead><tr style="background:#f1f5f9;border-bottom:1px solid #e2e8f0">';
-                                $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">Cuota</th>';
-                                $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">Fecha vencimiento</th>';
-                                $html .= '<th style="padding:8px;text-align:right;color:#64748b;font-weight:600">Monto</th>';
-                                $html .= '</tr></thead><tbody>';
-
-                                $total = 0;
-                                foreach ($planCuotas as $cuota) {
-                                    $monto = floatval($cuota['monto'] ?? 0);
-                                    $total += $monto;
-                                    $html .= '<tr style="border-bottom:1px solid #f1f5f9">';
-                                    $html .= '<td style="padding:8px;color:#1e293b;font-weight:600">Cuota ' . intval($cuota['numero'] ?? 1) . '</td>';
-                                    $html .= '<td style="padding:8px;color:#64748b">' . ($cuota['fecha_vencimiento'] ?? '—') . '</td>';
-                                    $html .= '<td style="padding:8px;text-align:right;color:#1e293b;font-weight:600">S/ ' . number_format($monto, 2) . '</td>';
+                                foreach ($accounts as $a) {
+                                    $isSelected = $selected == $a->id ? 'checked' : '';
+                                    $html .= '<tr class="hover:bg-gray-50" style="cursor:pointer">';
+                                    $html .= '<td style="padding:8px 12px;text-center"><input type="radio" name="supplier_account_id" value="' . $a->id . '" ' . $isSelected . ' onchange="document.querySelector(\'[name=\\\"supplier_account_id\\\"]\').value = this.value; Livewire.dispatch(\'refreshForm\')" style="cursor:pointer"></td>';
+                                    $html .= '<td style="padding:8px 12px;color:#1e293b;font-weight:600">' . e($a->bank) . '</td>';
+                                    $html .= '<td style="padding:8px 12px;color:#1e293b"><span style="background:#dbeafe;color:#1d4ed8;font-size:11px;padding:2px 6px;border-radius:4px;font-weight:700">' . e($a->currency) . '</span></td>';
+                                    $html .= '<td style="padding:8px 12px;color:#64748b">' . e($a->account_number) . '</td>';
+                                    $html .= '<td style="padding:8px 12px;color:#64748b">' . ($a->cci ? e($a->cci) : '—') . '</td>';
+                                    $html .= '<td style="padding:8px 12px;text-center">';
+                                    if ($a->is_primary) {
+                                        $html .= '<span style="background:#d1fae5;color:#065f46;font-size:11px;padding:2px 6px;border-radius:4px;font-weight:700">SÍ</span>';
+                                    } else {
+                                        $html .= '<span style="color:#94a3b8">—</span>';
+                                    }
+                                    $html .= '</td>';
+                                    $html .= '<td style="padding:8px 12px;text-center"><button type="button" onclick="editAccount(' . $a->id . ')" style="border:none;background:none;padding:0;cursor:pointer;color:#0ea5e9" title="Editar"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></button></td>';
+                                    if ($a === reset($accounts)) {
+                                        $html .= '<script>function editAccount(id) { var field = document.querySelector("[name=\"supplier_edit_account_id\"]"); if(field) { field.value = id; Livewire.dispatch("refreshForm"); } }</script>';
+                                    }
                                     $html .= '</tr>';
                                 }
 
-                                $html .= '<tr style="background:#f0fdf4;border-top:2px solid #22c55e;font-weight:700">';
-                                $html .= '<td colspan="2" style="padding:8px;color:#15803d">Total:</td>';
-                                $html .= '<td style="padding:8px;text-align:right;color:#15803d">S/ ' . number_format($total, 2) . '</td>';
-                                $html .= '</tr>';
-                                $html .= '</tbody></table>';
+                                $html .= '</tbody>';
+                                $html .= '</table>';
+                                $html .= '</div>';
 
                                 return new HtmlString($html);
                             })
-                            ->visible(fn ($get) =>
-                                $this->isConditionFraccionado($get('condition_payment'), $conditionOpts)
-                            )
-                            ->columnSpanFull(),
-                    ])
-                        ->headerActions([
-                            FormAction::make('configurar_cuotas')
-                                ->label('Configurar cuotas')
-                                ->icon('heroicon-o-calendar')
-                                ->visible(fn (Get $get) =>
-                                    $this->isConditionFraccionado($get('condition_payment'), $conditionOpts)
-                                )
-                                ->modalHeading('Plan de cuotas')
-                                ->modalWidth('5xl')
-                                ->modalSubmitActionLabel('Guardar plan')
-                                ->fillForm(function (Get $get): array {
-                                    $planCuotas = $get('plan_cuotas');
-                                    if (is_string($planCuotas)) {
-                                        $planCuotas = json_decode($planCuotas, true) ?? [];
-                                    }
-                                    return [
-                                        'plan_items' => $planCuotas,
-                                    ];
-                                })
-                                ->form([
-                                    Placeholder::make('_info_total')
-                                        ->label('Verificación de totales')
-                                        ->content(new HtmlString(
-                                            '<div style="padding:12px;background:#ede9fe;border-radius:6px;border:1px solid #c4b5fd">'
-                                            . '<p style="color:#6b21a8;font-weight:600;margin:0 0 8px 0">Verifica que el total de cuotas coincida con el monto total de la orden</p>'
-                                            . '<p style="color:#64748b;font-size:0.9rem;margin:0">Los montos se calcularán al abrir la modal</p>'
-                                            . '</div>'
-                                        ))
-                                        ->columnSpanFull(),
+                            ->visible(fn ($get) => (bool) $get('supplier_id')),
 
-                                    Repeater::make('plan_items')
-                                        ->hiddenLabel()
-                                        ->schema([
-                                            TextInput::make('numero')
-                                                ->label('Cuota #')
-                                                ->disabled()
-                                                ->dehydrated(true)
-                                                ->columnSpan(1),
-                                            DatePicker::make('fecha_vencimiento')
-                                                ->label('Fecha de vencimiento')
-                                                ->required()
-                                                ->columnSpan(2),
-                                            TextInput::make('monto')
-                                                ->label('Monto')
-                                                ->numeric()
-                                                ->required()
-                                                ->columnSpan(1),
-                                        ])
-                                        ->columns(4)
-                                        ->addActionLabel('+ Agregar cuota')
-                                        ->defaultItems(1)
-                                        ->live(debounce: 100)
-                                        ->afterStateUpdated(function ($state, Set $set) {
-                                            if (!is_array($state)) {
-                                                return;
-                                            }
-                                            $items = [];
-                                            foreach ($state as $index => $item) {
-                                                if (is_array($item)) {
-                                                    $item['numero'] = count($items) + 1;
-                                                    $items[] = $item;
-                                                }
-                                            }
-                                            $set('plan_items', $items);
-                                        })
-                                        ->columnSpanFull(),
-                                ])
-                                ->action(function (array $data, Set $set, Get $get) {
-                                    $items = $data['plan_items'] ?? [];
-                                    $numbered = [];
-                                    $totalCuotas = 0;
-                                    foreach ($items as $index => $item) {
-                                        if (is_array($item)) {
-                                            $item['numero'] = count($numbered) + 1;
-                                            $totalCuotas += floatval($item['monto'] ?? 0);
-                                            $numbered[] = $item;
-                                        }
-                                    }
-
-                                    // Calcular total de la orden
-                                    $orderItems = $get('items') ?? [];
-                                    $subtotal = collect($orderItems)->sum(fn ($i) => floatval($i['quantity'] ?? 0) * floatval($i['unit_price'] ?? 0));
-                                    $grabable = $get('grabable');
-                                    $igv = $grabable ? round($subtotal * 0.18, 2) : 0;
-                                    $orderTotal = round($subtotal + $igv, 2);
-                                    if ($get('apply_discount') && $get('discount_type_id')) {
-                                        $pct = floatval($get('discount_type_id'));
-                                        $discount = round($orderTotal * $pct / 100, 2);
-                                        $orderTotal = round($orderTotal - $discount, 2);
-                                    }
-
-                                    // Validar que coincidan
-                                    if (abs($totalCuotas - $orderTotal) > 0.01) {
-                                        \Filament\Notifications\Notification::make()
-                                            ->title('Error: Total de cuotas no coincide')
-                                            ->body("El total de cuotas (S/ " . number_format($totalCuotas, 2) . ") debe ser igual al monto total de la orden (S/ " . number_format($orderTotal, 2) . ")")
-                                            ->danger()
-                                            ->send();
-                                        return;
-                                    }
-
-                                    $set('plan_cuotas', json_encode($numbered));
-                                    $set('quotas', count($numbered));
-                                }),
-                        ]),
-                ]),
+                    ]),
 
             // ── CARD 3: Detalle de la orden ───────────────────────────────
             Section::make('3. Detalle de la orden')
@@ -586,27 +440,36 @@ trait HasOrderForm
                 ->disabled(!$canEditSection23)
                 ->description('Productos / servicios y configuración tributaria')
                 ->schema([
-                    Grid::make(2)->schema([
+                    Grid::make(3)->schema([
                         Toggle::make('grabable')
                             ->label('Calcular IGV (18%)')
                             ->helperText('Desactiva para inafectos o exonerados')
-                            ->default(true)->live(),
+                            ->default(true)->live()
+                            ->columnSpan(1),
 
                         Toggle::make('apply_discount')
                             ->label('Aplicar descuento')
                             ->helperText('Descuento general sobre el total')
-                            ->live(),
-                    ]),
+                            ->live()
+                            ->afterStateUpdated(function ($state, Set $set) {
+                                if (!$state) {
+                                    $set('discount_type_id', null);
+                                }
+                            })
+                            ->columnSpan(1),
 
-                    Grid::make(1)->schema([
                         Select::make('discount_type_id')
-                            ->label('% Descuento')
+                            ->hiddenLabel()
+                            ->placeholder('Selecciona % de descuento')
                             ->options($discountOpts ?: [
                                 '5'  => '5% — Pronto pago',
                                 '10' => '10% — Convenio',
                                 '15' => '15% — Liquidación',
-                            ])->live(),
-                    ])->hidden(fn ($get) => !$get('apply_discount')),
+                            ])
+                            ->disabled(fn ($get) => !$get('apply_discount'))
+                            ->live()
+                            ->columnSpan(1),
+                    ]),
 
                     Grid::make(5)->schema([
                         Placeholder::make('_h_desc')->hiddenLabel()
@@ -665,6 +528,194 @@ trait HasOrderForm
                         ->columnSpanFull(),
                 ]),
 
+            // ── CARD 3.5: Condición de pago ───────────────────────────────
+            Section::make('Condición de pago')->compact()->schema([
+                Grid::make(9)->schema([
+                    Select::make('payment_id')
+                        ->label('Forma de pago')
+                        ->options($paymentOpts)->searchable()->required()
+                        ->columnSpan(2),
+
+                    Select::make('condition_payment')
+                        ->label('Condición')
+                        ->options($conditionOpts)->searchable()->required()
+                        ->live()
+                        ->columnSpan(2),
+
+                    TextInput::make('quotas')
+                        ->label('N° de cuotas')
+                        ->numeric()->default(1)->minValue(1)->required()
+                        ->disabled()
+                        ->columnSpan(1)
+                        ->dehydrated(true),
+
+                    DatePicker::make('expiration_date')
+                        ->label('Fecha de vencimiento')
+                        ->required(fn ($get) => !$this->isConditionFraccionado($get('condition_payment'), $conditionOpts))
+                        ->columnSpan(2),
+
+                    Select::make('payment_schedule_id')
+                        ->label('Programación')
+                        ->options(PaymentSchedule::orderBy('name')->pluck('name', 'id'))
+                        ->searchable()->required()
+                        ->columnSpan(2),
+                ]),
+
+                Hidden::make('plan_cuotas'),
+
+                Placeholder::make('_plan_cuotas_placeholder')
+                    ->label('Plan de cuotas configurado')
+                    ->content(function ($get) use ($conditionOpts) {
+                        if (!$this->isConditionFraccionado($get('condition_payment'), $conditionOpts)) {
+                            return new HtmlString('<span style="color:#94a3b8;font-style:italic">No aplicable para esta condición</span>');
+                        }
+
+                        $planCuotas = $get('plan_cuotas');
+                        if (is_string($planCuotas)) {
+                            $planCuotas = json_decode($planCuotas, true) ?? [];
+                        }
+
+                        if (empty($planCuotas)) {
+                            return new HtmlString('<span style="color:#94a3b8;font-style:italic">Sin configurar aún. Haz clic en "Configurar cuotas" →</span>');
+                        }
+
+                        $html = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem">';
+                        $html .= '<thead><tr style="background:#f1f5f9;border-bottom:1px solid #e2e8f0">';
+                        $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">Cuota</th>';
+                        $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">Fecha vencimiento</th>';
+                        $html .= '<th style="padding:8px;text-align:right;color:#64748b;font-weight:600">Monto</th>';
+                        $html .= '</tr></thead><tbody>';
+
+                        $total = 0;
+                        foreach ($planCuotas as $cuota) {
+                            $monto = floatval($cuota['monto'] ?? 0);
+                            $total += $monto;
+                            $html .= '<tr style="border-bottom:1px solid #f1f5f9">';
+                            $html .= '<td style="padding:8px;color:#1e293b;font-weight:600">Cuota ' . intval($cuota['numero'] ?? 1) . '</td>';
+                            $html .= '<td style="padding:8px;color:#64748b">' . ($cuota['fecha_vencimiento'] ?? '—') . '</td>';
+                            $html .= '<td style="padding:8px;text-align:right;color:#1e293b;font-weight:600">S/ ' . number_format($monto, 2) . '</td>';
+                            $html .= '</tr>';
+                        }
+
+                        $html .= '<tr style="background:#f0fdf4;border-top:2px solid #22c55e;font-weight:700">';
+                        $html .= '<td colspan="2" style="padding:8px;color:#15803d">Total:</td>';
+                        $html .= '<td style="padding:8px;text-align:right;color:#15803d">S/ ' . number_format($total, 2) . '</td>';
+                        $html .= '</tr>';
+                        $html .= '</tbody></table>';
+
+                        return new HtmlString($html);
+                    })
+                    ->visible(fn ($get) =>
+                        $this->isConditionFraccionado($get('condition_payment'), $conditionOpts)
+                    )
+                    ->columnSpanFull(),
+            ])
+                ->headerActions([
+                    FormAction::make('configurar_cuotas')
+                        ->label('Configurar cuotas')
+                        ->icon('heroicon-o-calendar')
+                        ->visible(fn (Get $get) =>
+                            $this->isConditionFraccionado($get('condition_payment'), $conditionOpts)
+                        )
+                        ->modalHeading('Plan de cuotas')
+                        ->modalWidth('5xl')
+                        ->modalSubmitActionLabel('Guardar plan')
+                        ->fillForm(function (Get $get): array {
+                            $planCuotas = $get('plan_cuotas');
+                            if (is_string($planCuotas)) {
+                                $planCuotas = json_decode($planCuotas, true) ?? [];
+                            }
+                            return [
+                                'plan_items' => $planCuotas,
+                            ];
+                        })
+                        ->form([
+                            Placeholder::make('_info_total')
+                                ->label('Verificación de totales')
+                                ->content(new HtmlString(
+                                    '<div style="padding:12px;background:#ede9fe;border-radius:6px;border:1px solid #c4b5fd">'
+                                    . '<p style="color:#6b21a8;font-weight:600;margin:0 0 8px 0">Verifica que el total de cuotas coincida con el monto total de la orden</p>'
+                                    . '<p style="color:#64748b;font-size:0.9rem;margin:0">Los montos se calcularán al abrir la modal</p>'
+                                    . '</div>'
+                                ))
+                                ->columnSpanFull(),
+
+                            Repeater::make('plan_items')
+                                ->hiddenLabel()
+                                ->schema([
+                                    TextInput::make('numero')
+                                        ->label('Cuota #')
+                                        ->disabled()
+                                        ->dehydrated(true)
+                                        ->columnSpan(1),
+                                    DatePicker::make('fecha_vencimiento')
+                                        ->label('Fecha de vencimiento')
+                                        ->required()
+                                        ->columnSpan(2),
+                                    TextInput::make('monto')
+                                        ->label('Monto')
+                                        ->numeric()
+                                        ->required()
+                                        ->columnSpan(1),
+                                ])
+                                ->columns(4)
+                                ->addActionLabel('+ Agregar cuota')
+                                ->defaultItems(1)
+                                ->live(debounce: 100)
+                                ->afterStateUpdated(function ($state, Set $set) {
+                                    if (!is_array($state)) {
+                                        return;
+                                    }
+                                    $items = [];
+                                    foreach ($state as $index => $item) {
+                                        if (is_array($item)) {
+                                            $item['numero'] = count($items) + 1;
+                                            $items[] = $item;
+                                        }
+                                    }
+                                    $set('plan_items', $items);
+                                })
+                                ->columnSpanFull(),
+                        ])
+                        ->action(function (array $data, Set $set, Get $get) {
+                            $items = $data['plan_items'] ?? [];
+                            $numbered = [];
+                            $totalCuotas = 0;
+                            foreach ($items as $index => $item) {
+                                if (is_array($item)) {
+                                    $item['numero'] = count($numbered) + 1;
+                                    $totalCuotas += floatval($item['monto'] ?? 0);
+                                    $numbered[] = $item;
+                                }
+                            }
+
+                            // Calcular total de la orden
+                            $orderItems = $get('items') ?? [];
+                            $subtotal = collect($orderItems)->sum(fn ($i) => floatval($i['quantity'] ?? 0) * floatval($i['unit_price'] ?? 0));
+                            $grabable = $get('grabable');
+                            $igv = $grabable ? round($subtotal * 0.18, 2) : 0;
+                            $orderTotal = round($subtotal + $igv, 2);
+                            if ($get('apply_discount') && $get('discount_type_id')) {
+                                $pct = floatval($get('discount_type_id'));
+                                $discount = round($orderTotal * $pct / 100, 2);
+                                $orderTotal = round($orderTotal - $discount, 2);
+                            }
+
+                            // Validar que coincidan
+                            if (abs($totalCuotas - $orderTotal) > 0.01) {
+                                \Filament\Notifications\Notification::make()
+                                    ->title('Error: Total de cuotas no coincide')
+                                    ->body("El total de cuotas (S/ " . number_format($totalCuotas, 2) . ") debe ser igual al monto total de la orden (S/ " . number_format($orderTotal, 2) . ")")
+                                    ->danger()
+                                    ->send();
+                                return;
+                            }
+
+                            $set('plan_cuotas', json_encode($numbered));
+                            $set('quotas', count($numbered));
+                        }),
+                ]),
+
             // ── CARD 4: Documentos ────────────────────────────────────────
             Section::make('4. Documentos')
                 ->compact()
@@ -673,67 +724,249 @@ trait HasOrderForm
                 ->description('Comprobante de pago y documentos anexos')
                 ->schema([
                     Section::make('Comprobante de pago')->compact()->schema([
-                        Grid::make(2)->schema([
-                            Select::make('voucher_type_id')
-                                ->label('Tipo de comprobante')
-                                ->options($voucherTypes)
-                                ->searchable()
-                                ->required($orderStatus === 7)
-                                ->helperText($orderStatus === 7
-                                    ? 'Requerido en esta etapa de sustentación.'
-                                    : 'Opcional hasta la etapa de sustentación.'),
+                        Hidden::make('comprobantes_data'),
 
-                            FileUpload::make('voucher_file')
-                                ->label('Archivo del comprobante')
-                                ->disk('public')->directory('orders/vouchers')
-                                ->acceptedFileTypes(['application/pdf', 'image/*'])
-                                ->maxSize(10240)
-                                ->required($orderStatus === 7)
-                                ->helperText('PDF, JPG, PNG — Máx. 10 MB'),
-                        ]),
-                    ]),
+                        Placeholder::make('_comprobantes_placeholder')
+                            ->content(function ($get) {
+                                $comprobantes = $get('comprobantes_data');
+                                if (is_string($comprobantes)) {
+                                    $comprobantes = json_decode($comprobantes, true) ?? [];
+                                }
 
-                    Section::make('Documentos anexos')->compact()->schema([
-                        Grid::make(2)->schema(
-                            $attachTypes->map(fn ($m) =>
-                                FileUpload::make('doc_' . $m->value)
-                                    ->label($m->description)
-                                    ->disk('public')->directory('orders/docs')
+                                if (empty($comprobantes)) {
+                                    return new HtmlString('<span style="color:#94a3b8;font-style:italic">Sin comprobantes. Haz clic en "Agregar comprobante" →</span>');
+                                }
+
+                                // Obtener símbolo de moneda
+                                $currencyValue = $get('currency');
+                                $currencySymbols = [
+                                    'PEN' => 'S/',
+                                    'USD' => '$',
+                                    'EUR' => '€',
+                                ];
+                                $currencySymbol = $currencySymbols[$currencyValue] ?? $currencyValue;
+
+                                $html = '<div x-data="comprobantesTable()" style="width:100%">';
+                                $html .= '<table style="width:100%;border-collapse:collapse;font-size:0.85rem">';
+                                $html .= '<thead><tr style="background:#f1f5f9;border-bottom:1px solid #e2e8f0">';
+                                $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">Tipo</th>';
+                                $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">N° Documento</th>';
+                                $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">Monto</th>';
+                                $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">Fecha de Emisión</th>';
+                                $html .= '<th style="padding:8px;text-align:center;color:#64748b;font-weight:600">Archivo</th>';
+                                $html .= '<th style="padding:8px;text-align:center;color:#64748b;font-weight:600">Acciones</th>';
+                                $html .= '</tr></thead><tbody>';
+
+                                foreach ($comprobantes as $index => $comp) {
+                                    $html .= '<tr style="border-bottom:1px solid #e2e8f0">';
+                                    $html .= '<td style="padding:8px">' . ($comp['type_file_label'] ?? $comp['type_file'] ?? '-') . '</td>';
+                                    $html .= '<td style="padding:8px">' . ($comp['document_number'] ?? '-') . '</td>';
+                                    $html .= '<td style="padding:8px;text-align:right">' . (isset($comp['amount']) ? $currencySymbol . ' ' . number_format($comp['amount'], 2) : '-') . '</td>';
+                                    $html .= '<td style="padding:8px">' . ($comp['emission_date'] ?? '-') . '</td>';
+                                    $html .= '<td style="padding:8px;text-align:center">';
+                                    if ($comp['path'] ?? false) {
+                                        $html .= '<a href="' . asset('storage/' . $comp['path']) . '" target="_blank" style="color:#3b82f6;text-decoration:underline;cursor:pointer;font-size:0.9rem">Ver documento</a>';
+                                    } else {
+                                        $html .= '<span style="color:#94a3b8">-</span>';
+                                    }
+                                    $html .= '</td>';
+                                    $html .= '<td style="padding:8px;text-align:center;display:flex;gap:8px;justify-content:center">';
+                                    $html .= '<button type="button" onclick="deleteComprobante(' . $index . ')" style="color:#ef4444;cursor:pointer;border:none;background:none;padding:4px;display:inline-flex;align-items:center" title="Eliminar"><svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg></button>';
+                                    $html .= '<button type="button" onclick="editComprobante(' . $index . ')" style="color:#3b82f6;cursor:pointer;border:none;background:none;padding:4px;display:inline-flex;align-items:center" title="Editar"><svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" /></svg></button>';
+                                    $html .= '</td>';
+                                    $html .= '</tr>';
+                                }
+
+                                $html .= '</tbody></table>';
+                                $html .= '</div>';
+                                $html .= '<script>
+                                    function deleteComprobante(index) {
+                                        if (confirm("¿Eliminar este comprobante?")) {
+                                            let fieldValue = document.querySelector("input[name*=\'comprobantes_data\']").value;
+                                            let comprobantes = JSON.parse(fieldValue);
+                                            comprobantes.splice(index, 1);
+                                            document.querySelector("input[name*=\'comprobantes_data\']").value = JSON.stringify(comprobantes);
+                                            location.reload();
+                                        }
+                                    }
+                                    function editComprobante(index) {
+                                        alert("Edición aún no implementada. Por ahora, elimina y agrega de nuevo.");
+                                    }
+                                </script>';
+                                return new HtmlString($html);
+                            })
+                            ->columnSpanFull(),
+                    ])->headerActions([
+                        FormAction::make('agregar_comprobante')
+                            ->label('+ Agregar comprobante')
+                            ->icon('heroicon-o-document-plus')
+                            ->modalHeading('Agregar comprobante de pago')
+                            ->modalWidth('2xl')
+                            ->modalSubmitActionLabel('Guardar comprobante')
+                            ->form([
+                                Select::make('type_file')
+                                    ->label('Tipo de comprobante')
+                                    ->options($voucherTypes)
+                                    ->searchable()
+                                    ->required()
+                                    ->live(),
+
+                                TextInput::make('type_file_label')
+                                    ->label('')
+                                    ->hidden()
+                                    ->dehydrated(false),
+
+                                TextInput::make('document_number')
+                                    ->label('N.° de documento')
+                                    ->placeholder('F001-00012345')
+                                    ->required(),
+
+                                TextInput::make('amount')
+                                    ->label('Monto')
+                                    ->numeric()
+                                    ->step(0.01)
+                                    ->required(),
+
+                                DatePicker::make('emission_date')
+                                    ->label('Fecha de emisión')
+                                    ->format('d/m/Y')
+                                    ->required(),
+
+                                FileUpload::make('path')
+                                    ->label('Archivo del comprobante')
+                                    ->disk('public')->directory('orders/vouchers')
+                                    ->visibility('public')
                                     ->acceptedFileTypes(['application/pdf', 'image/*'])
                                     ->maxSize(10240)
-                                    ->helperText('PDF, JPG, PNG — Máx. 10 MB')
-                            )->all()
-                        ),
+                                    ->downloadable(),
+                            ])
+                            ->action(function (array $data, Set $set, Get $get) {
+                                $comprobantes = $get('comprobantes_data');
+                                if (is_string($comprobantes)) {
+                                    $comprobantes = json_decode($comprobantes, true) ?? [];
+                                }
+
+                                // Obtener el label del tipo desde la BD
+                                $master = \App\Models\Master::where('main', 15)->where('value', $data['type_file'])->first();
+                                $data['type_file_label'] = $master?->description ?? $data['type_file'];
+
+                                $comprobantes[] = $data;
+                                $set('comprobantes_data', json_encode($comprobantes));
+
+                                \Filament\Notifications\Notification::make()
+                                    ->title('Comprobante agregado')
+                                    ->success()
+                                    ->send();
+                            }),
                     ]),
+
+                    Section::make('Documentos anexos')
+                        ->compact()
+                        ->description(new HtmlString('<span style="font-size:0.85rem;color:#64748b">PDF, JPG, PNG · máx. 10 MB c/u</span>'))
+                        ->schema([
+                            Hidden::make('documentos_anexos_data'),
+
+                            Placeholder::make('_documentos_placeholder')
+                                ->label('Documentos agregados')
+                                ->content(function ($get) use ($attachTypes) {
+                                    $documentos = $get('documentos_anexos_data');
+                                    if (is_string($documentos)) {
+                                        $documentos = json_decode($documentos, true) ?? [];
+                                    }
+
+                                    if (empty($documentos)) {
+                                        return new HtmlString('<span style="color:#94a3b8;font-style:italic">Sin documentos. Haz clic en "Agregar documento" →</span>');
+                                    }
+
+                                    // Crear mapa de tipos
+                                    $tiposMap = $attachTypes->pluck('description', 'value')->toArray();
+
+                                    $html = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem">';
+                                    $html .= '<thead><tr style="background:#f1f5f9;border-bottom:1px solid #e2e8f0">';
+                                    $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">Tipo</th>';
+                                    $html .= '<th style="padding:8px;text-align:left;color:#64748b;font-weight:600">Comentario</th>';
+                                    $html .= '<th style="padding:8px;text-align:center;color:#64748b;font-weight:600">Archivo</th>';
+                                    $html .= '<th style="padding:8px;text-align:center;color:#64748b;font-weight:600">Acciones</th>';
+                                    $html .= '</tr></thead><tbody>';
+
+                                    foreach ($documentos as $index => $doc) {
+                                        $html .= '<tr style="border-bottom:1px solid #e2e8f0">';
+                                        $html .= '<td style="padding:8px">' . ($tiposMap[$doc['type']] ?? $doc['type'] ?? '-') . '</td>';
+                                        $html .= '<td style="padding:8px">' . ($doc['comentario'] ?? '-') . '</td>';
+                                        $html .= '<td style="padding:8px;text-align:center">';
+                                        if ($doc['path'] ?? false) {
+                                            $html .= '<a href="' . asset('storage/' . $doc['path']) . '" target="_blank" style="color:#3b82f6;text-decoration:underline;cursor:pointer;font-size:0.9rem">Ver documento</a>';
+                                        } else {
+                                            $html .= '<span style="color:#94a3b8">-</span>';
+                                        }
+                                        $html .= '</td>';
+                                        $html .= '<td style="padding:8px;text-align:center;display:flex;gap:8px;justify-content:center">';
+                                        $html .= '<button type="button" onclick="deleteDocumento(' . $index . ')" style="color:#ef4444;cursor:pointer;border:none;background:none;padding:4px;display:inline-flex;align-items:center" title="Eliminar"><svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg></button>';
+                                        $html .= '</td>';
+                                        $html .= '</tr>';
+                                    }
+
+                                    $html .= '</tbody></table>';
+                                    $html .= '<script>
+                                        function deleteDocumento(index) {
+                                            if (confirm("¿Eliminar este documento?")) {
+                                                let fieldValue = document.querySelector("input[name*=\'documentos_anexos_data\']").value;
+                                                let documentos = JSON.parse(fieldValue);
+                                                documentos.splice(index, 1);
+                                                document.querySelector("input[name*=\'documentos_anexos_data\']").value = JSON.stringify(documentos);
+                                                location.reload();
+                                            }
+                                        }
+                                    </script>';
+                                    return new HtmlString($html);
+                                })
+                                ->columnSpanFull(),
+                        ])->headerActions([
+                            FormAction::make('agregar_documento')
+                                ->label('+ Agregar D.Anexos')
+                                ->icon('heroicon-o-document-plus')
+                                ->modalHeading('Agregar documento anexo')
+                                ->modalWidth('2xl')
+                                ->modalSubmitActionLabel('Guardar documento')
+                                ->form([
+                                    Select::make('type')
+                                        ->label('Tipo de documento')
+                                        ->options($attachTypes->pluck('description', 'value')->toArray())
+                                        ->required(),
+
+                                    TextInput::make('comentario')
+                                        ->label('Comentario')
+                                        ->placeholder('Opcional: observaciones sobre el documento')
+                                        ->maxLength(500),
+
+                                    FileUpload::make('path')
+                                        ->label('Archivo')
+                                        ->disk('public')->directory('orders/docs')
+                                        ->visibility('public')
+                                        ->acceptedFileTypes(['application/pdf', 'image/*'])
+                                        ->maxSize(10240)
+                                        ->downloadable()
+                                        ->required(),
+                                ])
+                                ->action(function (array $data, Set $set, Get $get) {
+                                    $documentos = $get('documentos_anexos_data');
+                                    if (is_string($documentos)) {
+                                        $documentos = json_decode($documentos, true) ?? [];
+                                    }
+
+                                    $documentos[] = $data;
+                                    $set('documentos_anexos_data', json_encode($documentos));
+
+                                    \Filament\Notifications\Notification::make()
+                                        ->title('Documento agregado')
+                                        ->success()
+                                        ->send();
+                                }),
+                        ]),
                 ]),
 
-            // ── CARD 5: Constancia de Abono ───────────────────────────────
-            Section::make('5. Constancia de Abono')
-                ->compact()
-                ->collapsible()->collapsed(!$canEditConstancia)
-                ->description('Comprobante de transferencia o depósito bancario')
-                ->schema([
-                    FileUpload::make('doc_8')
-                        ->label($canEditConstancia ? 'Subir constancia de abono' : 'Constancia de abono')
-                        ->disk('public')->directory('orders/constancia')
-                        ->acceptedFileTypes(['application/pdf', 'image/*'])
-                        ->maxSize(10240)
-                        ->helperText($canEditConstancia ? 'PDF, JPG, PNG — Máx. 10 MB' : null)
-                        ->required($canEditConstancia)
-                        ->disabled(!$canEditConstancia),
-
-                    Placeholder::make('_constancia_pendiente')
-                        ->hiddenLabel()
-                        ->content(new HtmlString(
-                            '<span style="color:#94a3b8;font-style:italic;font-size:0.85rem">'
-                            . 'Pendiente de adjuntar'
-                            . '</span>'
-                        ))
-                        ->hidden(fn ($get) => !empty($get('doc_8'))),
-                ]),
-
-            // ── CARD 6: Registro Contable (UC) ───────────────────────────
-            Section::make('6. Registro Contable')
+            // ── CARD 5: Registro Contable (UC) ───────────────────────────
+            Section::make('5. Registro Contable')
                 ->compact()
 
                 ->collapsible()->collapsed()

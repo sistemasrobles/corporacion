@@ -1,0 +1,30 @@
+/* Estilos personalizados para modales de Filament */
+
+/* Cabecera modal - gris oscuro/plomo */
+[role="dialog"] [class*="modal-header"],
+.fi-modal-header,
+.fi-modal > div:first-child,
+[class*="max-w-"][class*="rounded"][class*="shadow"] > div:first-child {
+    background-color: #475569 !important;
+    color: white !important;
+}
+
+/* Títulos en modal */
+[role="dialog"] h2,
+.fi-modal h2,
+[role="dialog"] .fi-modal-heading {
+    color: white !important;
+    font-weight: 600 !important;
+}
+
+/* Botón cerrar */
+[role="dialog"] button[aria-label*="lose"],
+[role="dialog"] button[aria-label*="Close"],
+.fi-modal-close {
+    color: white !important;
+}
+
+[role="dialog"] button[aria-label*="lose"]:hover,
+[role="dialog"] button[aria-label*="Close"]:hover {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+}

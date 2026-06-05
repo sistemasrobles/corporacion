@@ -10,7 +10,7 @@ class OrderFile extends Model
 
     public $incrementing = false;
 
-    protected $fillable = ['id', 'type_file', 'order_id', 'path', 'principal', 'created_by', 'updated_by'];
+    protected $fillable = ['id', 'type_file', 'document_number', 'amount', 'emission_date', 'order_id', 'path', 'principal', 'created_by', 'updated_by'];
 
     public function order()
     {

@@ -7,3 +7,20 @@
         @apply antialiased;
     }
 }
+
+/* Estilos para modales de Filament */
+[role="dialog"] {
+    --tw-bg-opacity: 1;
+}
+
+[role="dialog"] > div > div:first-child {
+    @apply bg-slate-600 !important;
+}
+
+[role="dialog"] > div > div:first-child h2 {
+    @apply text-white !important;
+}
+
+[role="dialog"] > div > div:first-child button {
+    @apply text-white !important;
+}

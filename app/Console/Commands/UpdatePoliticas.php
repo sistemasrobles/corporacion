@@ -44,9 +44,8 @@ class UpdatePoliticas extends Command
             // URGENTE - "LE APARECE" a cada rol
             ['user_type' => 'JA', 'status_id' => 1],
             ['user_type' => 'AA', 'status_id' => 1],
-            ['user_type' => 'AA', 'status_id' => 2],
+            ['user_type' => 'AA', 'status_id' => 102],
             ['user_type' => 'AA', 'status_id' => 5],
-            ['user_type' => 'AA', 'status_id' => 55],
             ['user_type' => 'GA', 'status_id' => 2],
             ['user_type' => 'GA', 'status_id' => 5],
             ['user_type' => 'GF', 'status_id' => 3],
@@ -57,11 +56,10 @@ class UpdatePoliticas extends Command
 
             // GENERAL - "LE APARECE" a cada rol
             ['user_type' => 'AA', 'status_id' => 1],
-            ['user_type' => 'AA', 'status_id' => 2],
             ['user_type' => 'AA', 'status_id' => 5],
             ['user_type' => 'GA', 'status_id' => 2],
-            ['user_type' => 'UC1', 'status_id' => 100],
             ['user_type' => 'GF', 'status_id' => 102],
+            ['user_type' => 'UC1', 'status_id' => 100],
             ['user_type' => 'UC3', 'status_id' => 91],
             ['user_type' => 'UC5', 'status_id' => 101],
             ['user_type' => 'UC2', 'status_id' => 55],
