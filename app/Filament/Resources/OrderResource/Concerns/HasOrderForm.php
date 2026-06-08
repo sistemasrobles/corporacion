@@ -444,7 +444,7 @@ trait HasOrderForm
                         Toggle::make('grabable')
                             ->label('Calcular IGV (18%)')
                             ->helperText('Desactiva para inafectos o exonerados')
-                            ->default(true)->live()
+                            ->default(true)
                             ->columnSpan(1),
 
                         Toggle::make('apply_discount')
@@ -467,7 +467,6 @@ trait HasOrderForm
                                 '15' => '15% — Liquidación',
                             ])
                             ->disabled(fn ($get) => !$get('apply_discount'))
-                            ->live()
                             ->columnSpan(1),
                     ]),
 
@@ -495,12 +494,12 @@ trait HasOrderForm
                             TextInput::make('quantity')
                                 ->hiddenLabel()
                                 ->numeric()->default(1)->minValue(1)
-                                ->live(debounce: 500),
+                                ->live(debounce: 1000),
 
                             TextInput::make('unit_price')
                                 ->hiddenLabel()
                                 ->numeric()->default(0)->step('0.01')->minValue(0.01)->required()
-                                ->live(debounce: 500),
+                                ->live(debounce: 1000),
 
                             Placeholder::make('row_subtotal')
                                 ->hiddenLabel()
@@ -512,12 +511,24 @@ trait HasOrderForm
                                 ),
                         ])
                         ->columns(5)
-                        ->live()
                         ->reorderableWithDragAndDrop(false)
                         ->extraAttributes(['class' => 'fi-items-table'])
                         ->addActionLabel('+ Agregar ítem')
                         ->defaultItems(1)
-                        ->columnSpanFull(),
+                        ->columnSpanFull()
+                        ->afterStateUpdated(function (Set $set, Get $get) {
+                            // Calcular solo al agregar/eliminar items, no en cada keystroke
+                            $items = $get('items') ?? [];
+                            $subtotal = collect($items)->sum(fn ($i) => floatval($i['quantity'] ?? 0) * floatval($i['unit_price'] ?? 0));
+                            $grabable = $get('grabable');
+                            $igv = $grabable ? round($subtotal * 0.18, 2) : 0;
+                            $total = round($subtotal + $igv, 2);
+                            if ($get('apply_discount') && $get('discount_type_id')) {
+                                $pct = floatval($get('discount_type_id'));
+                                $discount = round($total * $pct / 100, 2);
+                                $total = round($total - $discount, 2);
+                            }
+                        }),
 
                     Textarea::make('observation')
                         ->label('Observaciones')->rows(2)->columnSpanFull(),

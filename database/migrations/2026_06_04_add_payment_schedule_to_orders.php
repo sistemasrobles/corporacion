@@ -18,11 +18,15 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::table('orders', function (Blueprint $table) {
-            if (Schema::hasColumn('orders', 'payment_schedule_id')) {
-                $table->dropForeign(['payment_schedule_id']);
-                $table->dropColumn('payment_schedule_id');
+        if (Schema::hasColumn('orders', 'payment_schedule_id')) {
+            // Use raw statement to avoid constraint name mismatch in PostgreSQL
+            if (\Illuminate\Support\Facades\DB::getDriverName() === 'pgsql') {
+                \Illuminate\Support\Facades\DB::statement('ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_payment_schedule_id_foreign');
             }
-        });
+
+            Schema::table('orders', function (Blueprint $table) {
+                $table->dropColumn('payment_schedule_id');
+            });
+        }
     }
 };

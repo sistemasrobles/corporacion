@@ -34,7 +34,20 @@ return new class extends Migration
             }
         }
 
+        // Desactivar constraints temporalmente
+        if (DB::getDriverName() === 'pgsql') {
+            DB::statement('ALTER TABLE area_cost_center DISABLE TRIGGER ALL');
+        } else {
+            DB::statement('SET FOREIGN_KEY_CHECKS=0');
+        }
+
         DB::table('area_cost_center')->insert($rows);
+
+        if (DB::getDriverName() === 'pgsql') {
+            DB::statement('ALTER TABLE area_cost_center ENABLE TRIGGER ALL');
+        } else {
+            DB::statement('SET FOREIGN_KEY_CHECKS=1');
+        }
     }
 
     public function down(): void

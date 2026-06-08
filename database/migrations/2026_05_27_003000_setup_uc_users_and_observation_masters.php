@@ -10,6 +10,13 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Desactivar constraints temporalmente
+        if (DB::getDriverName() === 'pgsql') {
+            DB::statement('ALTER TABLE users DISABLE TRIGGER ALL');
+        } else {
+            DB::statement('SET FOREIGN_KEY_CHECKS=0');
+        }
+
         // Columna uc_level en users
         Schema::table('users', function (Blueprint $table) {
             $table->tinyInteger('uc_level')->nullable()->after('user_type');
@@ -50,15 +57,22 @@ return new class extends Migration
             ['main' => 20, 'description' => 'Error en código contable',    'value' => '6', 'created_at' => now(), 'updated_at' => now()],
             ['main' => 20, 'description' => 'Otros',                       'value' => '7', 'created_at' => now(), 'updated_at' => now()],
         ]);
+
+        if (DB::getDriverName() === 'pgsql') {
+            DB::statement('ALTER TABLE users ENABLE TRIGGER ALL');
+        } else {
+            DB::statement('SET FOREIGN_KEY_CHECKS=1');
+        }
     }
 
     public function down(): void
     {
+        DB::table('users')->whereIn('email', ['pedro.bardales@empresa.com', 'annick.aguilar@empresa.com'])->delete();
+        DB::table('users')->where('id', 7)->update(['user_type' => 'AA']);
+        DB::table('masters')->where('main', 20)->delete();
+
         Schema::table('users', function (Blueprint $table) {
             $table->dropColumn('uc_level');
         });
-        DB::table('users')->whereIn('email', ['pedro.bardales@empresa.com', 'annick.aguilar@empresa.com'])->delete();
-        DB::table('users')->where('id', 7)->update(['user_type' => 'AA', 'uc_level' => null]);
-        DB::table('masters')->where('main', 20)->delete();
     }
 };
