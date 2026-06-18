@@ -6,8 +6,10 @@
     $href = fn ($name) => \Illuminate\Support\Facades\Route::has($name) ? route($name) : '#';
 
     // ¿Algún hijo del árbol está activo? (para abrirlo y marcarlo)
-    $ordenesActivo = request()->routeIs('orders.view') || request()->routeIs('orders.history');
-    $cuentasActivo = request()->routeIs('orders.payable') || request()->routeIs('orders.payments');
+    $ordenesActivo  = request()->routeIs('orders.view') || request()->routeIs('orders.history');
+    $cuentasActivo  = request()->routeIs('orders.payable') || request()->routeIs('orders.payments');
+    $provActivo     = request()->routeIs('suppliers.*');
+    $reqActivo      = request()->routeIs('requirements.*');
 @endphp
 
 <aside class="sidebar">
@@ -71,6 +73,40 @@
                 </div>
             </div>
             @endif
+
+            {{-- Árbol: Requerimientos (roles del flujo) --}}
+            @if (in_array($rol, ['AA', 'GA', 'GF', 'AF', 'UC1'], true))
+            <div class="nav-tree {{ $reqActivo ? 'open has-active' : '' }}">
+                <button type="button" class="nav-link nav-toggle">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+                    <span class="nav-text">Requerimientos</span>
+                    <svg class="nav-chev" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4"/></svg>
+                </button>
+                <div class="nav-sub">
+                    <div class="nav-sub-inner">
+                        <a href="{{ $href('requirements.index') }}" class="nav-sublink {{ request()->routeIs('requirements.index') ? 'active' : '' }}">
+                            <span class="nav-text">Órdenes de Requerimientos</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+            @endif
+
+            {{-- Árbol: Proveedores --}}
+            <div class="nav-tree {{ $provActivo ? 'open has-active' : '' }}">
+                <button type="button" class="nav-link nav-toggle">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
+                    <span class="nav-text">Proveedores</span>
+                    <svg class="nav-chev" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4"/></svg>
+                </button>
+                <div class="nav-sub">
+                    <div class="nav-sub-inner">
+                        <a href="{{ $href('suppliers.index') }}" class="nav-sublink {{ request()->routeIs('suppliers.index') ? 'active' : '' }}">
+                            <span class="nav-text">Proveedores</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
 
         </div>
 

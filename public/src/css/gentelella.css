@@ -4253,6 +4253,12 @@ input[type=range].slider:focus-visible {
   color: var(--text);
 }
 
+.dr-preset.active {
+  background: var(--primary-lt);
+  color: var(--primary);
+  font-weight: 600;
+}
+
 .dr-cal {
   padding: 14px;
 }

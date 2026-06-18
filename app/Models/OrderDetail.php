@@ -14,6 +14,7 @@ class OrderDetail extends Model
         'payment_id', 'payment_schedule_id', 'condition_payment', 'quotas', 'expiration_date',
         'grabable', 'discount', 'discount_type_id', 'igv', 'sub_total', 'total', 'amount_neto',
         'observation', 'items', 'codigo_registro', 'codigo_banco', 'source_account', 'created_by', 'updated_by',
+        'dest_bank', 'dest_account_number', 'dest_cci', 'dest_currency',   // snapshot cuenta destino (proveedor)
     ];
 
     protected $casts = [

@@ -7,17 +7,14 @@
 @section('page-title', 'Cuentas por Pagar')
 @section('breadcrumb', 'Cuentas por Pagar')
 
-@php
-    $abClass = fn (int $s) => match ($s) {
-        200 => 'status-yellow',
-        201 => 'status-blue',
-        202 => 'status-green',
-        default => 'status-blue',
-    };
-@endphp
-
 @push('styles')
 <style>
+    .filtros .row        { margin-bottom: 0; }
+    .filtros .form-group { margin-bottom: 10px; }
+    /* Tabla de abonos: ancho mínimo + scroll horizontal para que no se apilen las columnas */
+    #tabla-cxp { min-width: 1280px; }
+    #tabla-cxp th, #tabla-cxp td { white-space: nowrap; vertical-align: middle; }
+    #tabla-cxp td.obs-cell { white-space: normal; }   /* la observación sí puede envolver */
     .dep-acc { display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border-color);border-radius:var(--radius);cursor:pointer;transition:border-color .12s, background .12s; }
     .dep-acc:hover { border-color:var(--primary); background:#f8fafc; }
     .dep-acc input { width:18px;height:18px;flex-shrink:0;accent-color:var(--primary); }
@@ -35,21 +32,98 @@
     /* Dropzone compacto */
     .dz-compact { min-height: 120px; padding: 20px; }
     .dz-compact svg { width: 28px; height: 28px; margin-bottom: 6px; }
+    /* Modal de detalle de orden (solo lectura) */
+    #modal-order-detail .modal-dialog { max-width: 880px; }
+    .sum-fs { border:1px solid var(--border-color); border-radius:var(--radius-lg); padding:16px 18px 10px; margin-bottom:16px; }
+    .sum-fs > legend { font-size:11px; font-weight:700; color:var(--text-secondary); padding:0 8px; text-transform:uppercase; letter-spacing:.4px; }
+    .sum-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px 18px; }
+    .sum-l { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:var(--text-muted); font-weight:600; margin-bottom:2px; }
+    .sum-v { display:block; font-size:13.5px; color:var(--text); font-weight:500; line-height:1.4; }
+    .sum-just { margin-top:14px; }
+    @media (max-width: 720px) { .sum-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 </style>
 @endpush
 
 @section('content')
 
-    <div class="card">
-        <div class="card-header">
-            <div>
-                <div class="card-title">Abonos en proceso de pago</div>
-                <div class="card-subtitle">{{ count($rows) }} abono(s)</div>
-            </div>
+    {{-- ── Filtros ── --}}
+    <div class="card" style="margin-bottom:16px">
+        <div class="card-body">
+            <form id="filtros-cxp" class="filtros" onsubmit="return false">
+                <div class="row col-4">
+                    <div class="form-group">
+                        <label class="form-label">Programación</label>
+                        <select name="payment_schedule_id" class="form-control">
+                            <option value="">Todas las programaciones</option>
+                            @foreach ($schedules as $s)
+                                <option value="{{ $s->id }}">{{ $s->name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Tipo de orden</label>
+                        <select name="format_id" class="form-control">
+                            <option value="">Todos los tipos</option>
+                            @foreach ($tipos as $abrev => $desc)
+                                <option value="{{ $abrev }}">{{ $desc }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Empresa</label>
+                        <select name="company" class="form-control">
+                            <option value="">Todas las empresas</option>
+                            @foreach ($companies as $co)
+                                <option value="{{ $co->id }}">{{ $co->name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Estado del abono</label>
+                        <select name="status" class="form-control">
+                            <option value="">Todos los estados</option>
+                            <option value="200">Pendiente por depósito</option>
+                            <option value="201">Depositado</option>
+                            <option value="202">Constancia adjuntada</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="row col-4">
+                    <div class="form-group">
+                        <label class="form-label">Moneda</label>
+                        <select name="currency" class="form-control">
+                            <option value="">Todas las monedas</option>
+                            @foreach ($currencies as $code => $label)
+                                <option value="{{ $code }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Rango de vencimiento</label>
+                        <div class="date-range" data-date-range id="date-range">
+                            <input type="text" class="form-control" placeholder="Selecciona un rango..." readonly>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Buscar</label>
+                        <input type="text" name="q" class="form-control" placeholder="Orden, cuota, cuenta..." autocomplete="off">
+                    </div>
+                    <div class="form-group" style="display:flex;align-items:flex-end">
+                        <button type="button" id="btn-recargar" class="btn btn-outline" title="Limpia los filtros y trae datos frescos de la base de datos">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 11-1.6-3.9M13.5 2.5V5H11"/></svg>
+                            Recargar
+                        </button>
+                    </div>
+                </div>
+            </form>
         </div>
+    </div>
+
+    <div class="card">
         <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table">
+            <div class="table-responsive" style="overflow-x:auto">
+                <table class="table" id="tabla-cxp">
                     <thead>
                         <tr>
                             <th>Orden</th>
@@ -58,77 +132,16 @@
                             <th>Monto</th>
                             <th>Vencimiento</th>
                             <th>Estado abono</th>
+                            <th>Observación</th>
+                            <th>Banco origen</th>
                             <th>Cuenta origen</th>
+                            <th>N° Operación</th>
                             <th>Constancia</th>
                             <th></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        @forelse ($rows as $row)
-                            @php
-                                $o = $row['order']; $ab = $row['abono']; $acts = $row['acts'];
-                                $cur = ($o->detail?->currency === 'USD') ? '$ ' : 'S/ ';
-                            @endphp
-                            <tr>
-                                <td class="cell-mono">{{ $o->code }}</td>
-                                <td><span class="status status-blue">{{ \Illuminate\Support\Str::limit($o->paymentSchedule?->name, 14) }}</span></td>
-                                <td class="cell-strong">Cuota {{ $ab->quota_number }}</td>
-                                <td class="cell-strong">{{ $cur . number_format($ab->amount, 2) }}</td>
-                                <td>{{ $ab->due_date ? \Carbon\Carbon::parse($ab->due_date)->format('d/m/Y') : '—' }}</td>
-                                <td>
-                                    <span class="status {{ $abClass((int) $ab->status) }}">
-                                        {{ $abStatus[$ab->status] ?? $ab->status }}
-                                    </span>
-                                    @if ($ab->monto_ok)
-                                        <span class="status status-green" style="margin-left:4px">✓ Conforme</span>
-                                    @endif
-                                </td>
-                                <td>
-                                    @if ($ab->source_account_number)
-                                        <div style="font-size:12px;line-height:1.35">
-                                            <div class="cell-strong">{{ $ab->source_bank ?: '—' }}</div>
-                                            <div class="cell-mono" style="color:var(--text-muted)">{{ $ab->source_account_number }}</div>
-                                        </div>
-                                    @else
-                                        <span style="color:var(--text-muted)">—</span>
-                                    @endif
-                                </td>
-                                <td>
-                                    @if ($ab->constancia)
-                                        <a href="/storage/{{ $ab->constancia }}" target="_blank" style="color:var(--primary)">Ver</a>
-                                        @if ($ab->operation_number)
-                                            <div class="cell-mono" style="font-size:12px;color:var(--text-muted)">Op. {{ $ab->operation_number }}</div>
-                                        @endif
-                                    @else
-                                        <span style="color:var(--text-muted)">—</span>
-                                    @endif
-                                </td>
-                                <td style="text-align:right;white-space:nowrap">
-                                    @if ($acts['deposit'])
-                                        <button type="button" class="btn btn-outline btn-sm ab-deposit" data-id="{{ $ab->id }}" data-code="{{ $o->code }}" data-num="{{ $ab->quota_number }}" data-amount="{{ $cur . number_format($ab->amount, 2) }}" data-due="{{ $ab->due_date ? \Carbon\Carbon::parse($ab->due_date)->format('d/m/Y') : '—' }}" data-sched="{{ $o->paymentSchedule?->name }}" title="Registrar depósito" style="color:var(--green)">
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-                                        </button>
-                                    @endif
-                                    @if ($acts['constancia'])
-                                        <button type="button" class="btn btn-outline btn-sm ab-constancia" data-id="{{ $ab->id }}" data-code="{{ $o->code }}" data-num="{{ $ab->quota_number }}" data-amount="{{ $cur . number_format($ab->amount, 2) }}" data-due="{{ $ab->due_date ? \Carbon\Carbon::parse($ab->due_date)->format('d/m/Y') : '—' }}" data-sched="{{ $o->paymentSchedule?->name }}" title="Subir constancia" style="color:var(--primary)">
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-                                        </button>
-                                    @endif
-                                    @if ($acts['verify'])
-                                        <button type="button" class="btn btn-outline btn-sm ab-verify" data-id="{{ $ab->id }}" title="Marcar conforme" style="color:var(--green)">
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 6L9 17l-5-5"/></svg>
-                                        </button>
-                                    @endif
-                                    @if ($acts['observe'])
-                                        <button type="button" class="btn btn-outline btn-sm ab-observe" data-id="{{ $ab->id }}" data-code="{{ $o->code }}" data-num="{{ $ab->quota_number }}" title="Observar abono" style="color:#b45309">
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                                        </button>
-                                    @endif
-                                </td>
-                            </tr>
-                        @empty
-                            <tr><td colspan="9" style="padding:40px;text-align:center;color:var(--text-muted)">No hay abonos para gestionar.</td></tr>
-                        @endforelse
+                    <tbody id="cxp-body">
+                        @include('Orders.partials.payable-rows')
                     </tbody>
                 </table>
             </div>
@@ -235,15 +248,100 @@
         </div>
     </div>
 
+    {{-- ── MODAL: Ver constancia (visor de archivo) ── --}}
+    <div class="modal-backdrop" id="modal-constancia-ver" style="display:none">
+        <div class="modal-dialog" style="max-width:900px">
+            <div class="modal-header" style="background:var(--text);border-bottom:none">
+                <h3 class="modal-title" style="color:#fff">Constancia <span id="cv-info" style="opacity:.7;font-weight:400"></span></h3>
+                <button type="button" class="modal-close" data-close="modal-constancia-ver" style="color:rgba(255,255,255,.7)">×</button>
+            </div>
+            <div class="modal-body" id="cv-body" style="min-height:200px;background:var(--bg-surface-secondary)"></div>
+            <div class="modal-footer">
+                <a id="cv-open" href="#" target="_blank" rel="noopener" class="btn btn-outline">Abrir en pestaña</a>
+                <button type="button" class="btn btn-primary" data-close="modal-constancia-ver">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    {{-- ── MODAL: Detalle de la orden (solo lectura) ── --}}
+    <div class="modal-backdrop" id="modal-order-detail" style="display:none">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-header" style="background:var(--text);border-bottom:none">
+                <h3 class="modal-title" style="color:#fff">Detalle de la orden <span id="od-code" style="opacity:.7;font-weight:400"></span></h3>
+                <button type="button" class="modal-close" data-close="modal-order-detail" style="color:rgba(255,255,255,.7)">×</button>
+            </div>
+            <div class="modal-body" id="od-body" style="min-height:160px"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" data-close="modal-order-detail">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
 @endsection
 
 @push('scripts')
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/2.1.8/js/dataTables.min.js"></script>
+<script src="/src/date-range.js?v={{ @filemtime(public_path('src/date-range.js')) ?: time() }}"></script>
 <script>
 (function () {
-    const CSRF  = document.querySelector('meta[name="csrf-token"]').content;
-    const table = document.querySelector('table.table');
-    const BASE  = "{{ url('orders/abono') }}";
+    const CSRF    = document.querySelector('meta[name="csrf-token"]').content;
+    const tableEl = document.getElementById('tabla-cxp');
+    const BASE    = "{{ url('orders/abono') }}";
     let currentId = null;
+
+    // DataTables: paginación de 20 + buscador
+    const tableConfig = {
+        pageLength: 20,
+        order: [],
+        columnDefs: [{ targets: -1, orderable: false }],
+        layout: { topStart: null, topEnd: null, bottomStart: 'info', bottomEnd: 'paging' },
+        language: {
+            info: 'Mostrando _START_–_END_ de _TOTAL_',
+            infoEmpty: 'Sin abonos', infoFiltered: '(filtrado de _MAX_)',
+            zeroRecords: 'No se encontraron abonos',
+            emptyTable: 'No hay abonos para gestionar',
+            paginate: { previous: '← Anterior', next: 'Siguiente →' },
+        },
+    };
+    let dt = new DataTable('#tabla-cxp', tableConfig);
+
+    // ── Filtros client-side (empresa, programación, tipo, rango de vencimiento) ──
+    const form = document.getElementById('filtros-cxp');
+    let rangeFrom = null, rangeTo = null;
+
+    DataTable.ext.search.push(function (settings, data, dataIndex) {
+        if (settings.nTable.id !== 'tabla-cxp') return true;
+        const row    = settings.aoData[dataIndex].nTr;   // tabla en dibujo (sobrevive al re-init)
+        if (!row) return true;
+        const fSched = form.elements['payment_schedule_id'].value;
+        const fFmt   = form.elements['format_id'].value;
+        const fComp  = form.elements['company'].value;
+        const fStat  = form.elements['status'].value;
+        const fCurr  = form.elements['currency'].value;
+        if (fSched && row.dataset.schedule !== fSched) return false;
+        if (fFmt   && row.dataset.format   !== fFmt)   return false;
+        if (fComp  && row.dataset.company  !== fComp)  return false;
+        if (fStat  && row.dataset.status   !== fStat)  return false;
+        if (fCurr  && row.dataset.currency !== fCurr)  return false;
+        if (rangeFrom && rangeTo && row.dataset.due) {
+            const d = new Date(row.dataset.due + 'T00:00:00');
+            if (d < rangeFrom || d > rangeTo) return false;
+        }
+        return true;
+    });
+
+    form.querySelectorAll('select').forEach(sel => sel.addEventListener('change', () => dt.draw()));
+    form.elements['q'].addEventListener('input', function () { dt.search(this.value).draw(); });
+
+    // Rango de fecha → filtra por vencimiento de la cuota
+    const dr = document.getElementById('date-range');
+    dr.addEventListener('change', (e) => {
+        const f = e.detail.from, t = e.detail.to;
+        rangeFrom = f ? new Date(f.getFullYear(), f.getMonth(), f.getDate()) : null;
+        rangeTo   = t ? new Date(t.getFullYear(), t.getMonth(), t.getDate(), 23, 59, 59) : null;
+        dt.draw();
+    });
 
     function showToast(message, variant = 'success', timeout = 3200) {
         let host = document.querySelector('.toast-host');
@@ -260,7 +358,7 @@
     document.addEventListener('click', (e) => {
         const c = e.target.closest('[data-close]');
         if (c) closeM(c.dataset.close);
-        if (e.target.classList.contains('modal-backdrop') && ['modal-constancia', 'modal-deposit', 'modal-abono-obs'].includes(e.target.id)) closeM(e.target.id);
+        if (e.target.classList.contains('modal-backdrop') && ['modal-constancia', 'modal-deposit', 'modal-abono-obs', 'modal-order-detail', 'modal-constancia-ver'].includes(e.target.id)) closeM(e.target.id);
     });
 
     async function post(url, opts = {}) {
@@ -301,8 +399,109 @@
     }
     initDropzone('cons-dz', 'Suelta el archivo o haz clic para buscar');
 
+    // Recargar: trae abonos frescos de la BD y refresca la tabla (sin recargar la página)
+    document.getElementById('btn-recargar').addEventListener('click', async function () {
+        this.disabled = true;
+        window.blockUI && window.blockUI('Actualizando…');
+        try {
+            const res = await fetch("{{ route('orders.payable.rows') }}?_=" + Date.now(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+            const j   = await res.json().catch(() => ({}));
+            if (res.ok && j.status === 1) {
+                dt.destroy();
+                document.getElementById('cxp-body').innerHTML = j.data.html;
+                dt = new DataTable('#tabla-cxp', tableConfig);   // re-inicializa PRIMERO
+                form.reset();                                    // luego limpia los filtros
+                if (dr.__clear) dr.__clear();                    // su 'change' ya golpea a la tabla nueva
+                rangeFrom = rangeTo = null;
+                dt.search('').draw();
+            } else if (res.status === 419) {
+                showToast('Tu sesión expiró. Recarga la página (F5).', 'error');
+            } else {
+                showToast(j.description || 'No se pudo recargar.', 'error');
+            }
+        } catch (e) { showToast('Error de red al recargar.', 'error'); }
+        window.unblockUI && window.unblockUI();
+        this.disabled = false;
+    });
+
+    // ── Detalle de la orden (solo lectura) ──
+    const esc = (x) => String(x ?? '—').replace(/[&<>"]/g, ch => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[ch]));
+    function renderOrderDetail(d) {
+        const g = d.general, c = d.condicion, t = d.totales, p = d.proveedor, cuotas = d.cuotas || [];
+        const cell = (l, v) => `<div><span class="sum-l">${l}</span><span class="sum-v">${esc(v)}</span></div>`;
+
+        let prov = '';
+        if (p) {
+            const cta = p.cuenta ? cell('Banco', p.cuenta.banco) + cell('N° de cuenta', p.cuenta.numero) + cell('Moneda', p.cuenta.moneda) : '';
+            prov = `<fieldset class="sum-fs"><legend>Proveedor</legend><div class="sum-grid">${cell('RUC', p.ruc)}${cell('Razón social', p.razon_social)}${cell('Celular', p.celular || '—')}${cta}</div></fieldset>`;
+        }
+
+        let cond = cell('Forma de pago', c.forma_pago) + cell('Condición', c.condicion) + cell('Programación', c.programacion);
+        if (!d.es_fraccionado) cond += cell('Vencimiento', c.vencimiento);
+
+        const abCls = (id) => id === 202 ? 'status-green' : (id === 201 ? 'status-blue' : 'status-yellow');
+        const filas = cuotas.length
+            ? cuotas.map(q => `<tr><td class="cell-strong">Cuota ${q.numero}</td><td>${esc(q.fecha)}</td><td class="cell-strong" style="text-align:right">${esc(q.monto)}</td><td><span class="status ${abCls(q.estado_id)}">${esc(q.estado)}</span></td><td class="cell-mono">${q.operacion ? esc(q.operacion) : '—'}</td></tr>`).join('')
+            : `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:10px">Sin cronograma</td></tr>`;
+
+        return `
+            <fieldset class="sum-fs"><legend>Datos generales</legend>
+                <div class="sum-grid">
+                    ${cell('Empresa', g.empresa)}${cell('Tipo de orden', g.tipo)}${cell('Categoría', g.categoria)}${cell('Moneda', g.moneda)}
+                    ${cell('Título', g.titulo)}${cell('Sede', g.sede)}${cell('Área', g.area)}${cell('Centros de costo', g.cc)}
+                </div>
+                <div class="sum-just"><span class="sum-l">Justificación</span><span class="sum-v">${esc(g.justificacion)}</span></div>
+            </fieldset>
+            ${prov}
+            <fieldset class="sum-fs"><legend>Condición de pago</legend>
+                <div class="sum-grid">${cond}${cell('Subtotal', t.subtotal)}${cell('IGV', t.igv)}${cell('Descuento', t.descuento)}${cell('Total', t.total)}</div>
+            </fieldset>
+            <fieldset class="sum-fs" style="margin-bottom:0"><legend>Cronograma de pagos</legend>
+                <div class="table-responsive"><table class="table">
+                    <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>N° Operación</th></tr></thead>
+                    <tbody>${filas}</tbody>
+                </table></div>
+            </fieldset>`;
+    }
+
+    // Ver constancia en modal (imagen embebida o PDF en iframe)
+    function openConstancia(url, code, num) {
+        const isPdf = /\.pdf(\?|$)/i.test(url);
+        document.getElementById('cv-info').textContent = `${code} · Cuota ${num}`;
+        document.getElementById('cv-open').href = url;
+        document.getElementById('cv-body').innerHTML = isPdf
+            ? `<iframe src="${url}" style="width:100%;height:75vh;border:0;display:block"></iframe>`
+            : `<img src="${url}" alt="Constancia" style="max-width:100%;display:block;margin:0 auto">`;
+        openM('modal-constancia-ver');
+    }
+
     // Delegación de botones
-    table.addEventListener('click', async (e) => {
+    tableEl.addEventListener('click', async (e) => {
+        const cv = e.target.closest('.constancia-link');
+        if (cv) {
+            e.preventDefault();
+            openConstancia(cv.dataset.url, cv.dataset.code, cv.dataset.num);
+            return;
+        }
+
+        const link = e.target.closest('.order-link');
+        if (link) {
+            e.preventDefault();
+            document.getElementById('od-code').textContent = link.dataset.code || '';
+            document.getElementById('od-body').innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-muted)">Cargando…</div>';
+            openM('modal-order-detail');
+            try {
+                const res = await fetch(`{{ url('orders') }}/${link.dataset.id}/summary?_=` + Date.now(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+                const j   = await res.json();
+                document.getElementById('od-body').innerHTML = (res.ok && j.status === 1)
+                    ? renderOrderDetail(j.data)
+                    : '<div style="padding:30px;text-align:center;color:var(--red)">No se pudo cargar el detalle.</div>';
+            } catch (err) {
+                document.getElementById('od-body').innerHTML = '<div style="padding:30px;text-align:center;color:var(--red)">Error al cargar el detalle.</div>';
+            }
+            return;
+        }
+
         const dep = e.target.closest('.ab-deposit');
         if (dep) {
             currentId = dep.dataset.id;

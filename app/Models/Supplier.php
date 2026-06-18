@@ -7,8 +7,12 @@ use Illuminate\Database\Eloquent\Model;
 class Supplier extends Model
 {
     protected $fillable = [
-        'ruc', 'name', 'address', 'provincia', 'district', 'contact', 'phone', 'email',
+        'ruc', 'name', 'address', 'provincia', 'district', 'contact', 'phone', 'email', 'active',
         'created_by', 'updated_by',
+    ];
+
+    protected $casts = [
+        'active' => 'boolean',
     ];
 
     public function accounts()

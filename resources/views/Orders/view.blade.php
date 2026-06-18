@@ -20,8 +20,13 @@
 <style>
     .filtros .row        { margin-bottom: 0; }
     .filtros .form-group { margin-bottom: 10px; }
+    /* Dropzone compacto (modal de carga del AA) */
+    .dz-compact { min-height: 110px; padding: 18px; }
+    .dz-compact svg { width: 26px; height: 26px; margin-bottom: 6px; }
     /* Resumen en el modal de aprobación */
     #modal-approve .modal-dialog { max-width: 940px; }
+    /* Modal de carga de comprobantes/anexos del AA */
+    #modal-docs .modal-dialog { max-width: 1080px; }
     /* Modal de Código de Registro (tabla de documentos) */
     #modal-registro .modal-dialog { max-width: 1040px; }
     #modal-registro .table td, #modal-registro .table th { white-space: nowrap; }
@@ -48,6 +53,8 @@
 @endphp
 
 @section('content')
+
+    @php $isGA = auth()->user()->user_type === 'GA'; @endphp
 
     {{-- ── Filtros (DataTables, client-side) ── --}}
     <div class="card" style="margin-bottom:16px">
@@ -104,9 +111,9 @@
                     </div>
 
                     <div class="form-group" style="display:flex;align-items:flex-end;gap:8px">
-                        <button type="button" id="btn-limpiar" class="btn btn-outline">
-                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h10M6 6V4a2 2 0 014 0v2M5 6l1 8h4l1-8"/></svg>
-                            Limpiar
+                        <button type="button" id="btn-recargar" class="btn btn-outline" title="Limpia los filtros y trae datos frescos de la base de datos">
+                            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" style="vertical-align:-2px"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+                            Recargar
                         </button>
                     </div>
                 </div>
@@ -116,17 +123,27 @@
 
     {{-- ── Tabla (DataTables) ── --}}
     <div class="card">
-        <div class="card-header">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
             <div>
                 <div class="card-title">Listado de órdenes</div>
-                <div class="card-subtitle">{{ $orders->count() }} orden(es)</div>
+                <div class="card-subtitle" id="ordenes-count">{{ $orders->count() }} orden(es)</div>
             </div>
+            @if ($isGA)
+                <div id="bulk-bar" style="display:none;align-items:center;gap:12px">
+                    <span style="font-size:13px;color:var(--text-secondary)"><strong id="bulk-count">0</strong> seleccionada(s)</span>
+                    <button type="button" id="bulk-approve-btn" class="btn btn-sm btn-primary" style="background:var(--green);border-color:var(--green)">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-2px"><path d="M20 6L9 17l-5-5"/></svg>
+                        Aprobar seleccionadas
+                    </button>
+                </div>
+            @endif
         </div>
         <div class="card-body p-0">
             <div class="table-responsive">
                 <table class="table" id="tabla-ordenes" style="width:100%">
                     <thead>
                         <tr>
+                            @if ($isGA)<th data-orderable="false" style="width:34px;text-align:center"><input type="checkbox" id="chk-all" title="Seleccionar todo"></th>@endif
                             <th>Código</th>
                             <th>Empresa</th>
                             <th>Responsable</th>
@@ -138,82 +155,9 @@
                             <th data-orderable="false"></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        @foreach ($orders as $order)
-                            @php
-                                $detail = $order->detail;
-                                $amount = floatval($detail?->amount_neto ?? 0) > 0
-                                    ? floatval($detail->amount_neto)
-                                    : floatval($detail?->amount_ref ?? 0);
-                                $cur = ($detail?->currency === 'USD') ? '$ ' : 'S/ ';
-                            @endphp
-                            <tr
-                                data-status="{{ $order->status }}"
-                                data-format="{{ $order->format_id }}"
-                                data-area="{{ $detail?->area_id }}"
-                                data-schedule="{{ $order->payment_schedule_id }}"
-                            >
-                                <td class="cell-mono">{{ $order->code }}</td>
-                                <td>{{ $order->company->name ?? '—' }}</td>
-                                <td>{{ $order->responsible->name ?? '—' }}</td>
-                                <td class="cell-strong">{{ \Illuminate\Support\Str::limit($order->title, 35) }}</td>
-                                <td><span class="status status-blue">{{ $order->format_id }}</span></td>
-                                <td data-order="{{ $order->status }}">
-                                    <span class="status {{ $statusClass((int) $order->status) }}">
-                                        {{ $statusNames[$order->status] ?? $order->status }}
-                                    </span>
-                                </td>
-                                <td data-order="{{ $order->created_at?->timestamp }}">
-                                    {{ $order->created_at?->format('d/m/Y') }}
-                                </td>
-                                <td class="cell-strong" data-order="{{ $amount }}">
-                                    {{ $amount > 0 ? $cur . number_format($amount, 2) : '—' }}
-                                </td>
-                                <td style="text-align:right;white-space:nowrap">
-                                    @php $acts = $actions($order); @endphp
-                                    @if ($canEdit($order))
-                                        <a href="{{ route('orders.edit', $order->id) }}" class="btn btn-outline btn-sm" title="Editar" style="color:var(--primary)">
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                                        </a>
-                                    @endif
-                                    @if ($acts['approve'] && !$acts['close'])
-                                        <button type="button" class="btn btn-outline btn-sm btn-approve" data-id="{{ $order->id }}" data-code="{{ $order->code }}" data-label="{{ $acts['approveLabel'] }}" title="{{ $acts['approveLabel'] }}" style="color:var(--green)">
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 6L9 17l-5-5"/></svg>
-                                        </button>
-                                    @endif
-                                    @if ($acts['code'] || $acts['close'])
-                                        {{-- Código (UC1/UC2) o Cierre (UC3/UC4): abre la Vista Contable (lectura + acción + observar) --}}
-                                        <a href="{{ route('orders.vistacontable', $order->id) }}" class="btn btn-outline btn-sm" title="{{ $acts['close'] ? 'Terminar flujo' : $acts['codeLabel'] }}" style="color:var(--primary)">
-                                            @if ($acts['close'])
-                                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-                                            @else
-                                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 7a4 4 0 11-4 4M7 15l-3 3M9.5 12.5L7 15M11 11l6.5-6.5"/><circle cx="16.5" cy="7.5" r="2.5"/></svg>
-                                            @endif
-                                        </a>
-                                    @endif
-                                    {{-- Los pasos de Código (UC1/UC2) y Cierre (UC3/UC4) observan desde la Vista Contable --}}
-                                    @if ($acts['observe'] && !$acts['code'] && !$acts['close'])
-                                        <button type="button" class="btn btn-outline btn-sm btn-observe" data-id="{{ $order->id }}" data-code="{{ $order->code }}" title="Observar" style="color:#b45309">
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                                        </button>
-                                    @endif
-                                    @if ($acts['reject'])
-                                        <button type="button" class="btn btn-outline btn-sm btn-reject" data-id="{{ $order->id }}" data-code="{{ $order->code }}" title="Rechazar" style="color:var(--red)">
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-                                        </button>
-                                    @endif
-                                    @if ($acts['docs'])
-                                        <button type="button" class="btn btn-outline btn-sm btn-docs" data-id="{{ $order->id }}" data-code="{{ $order->code }}" title="Cargar documentos" style="color:var(--primary)">
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6M9 15h6"/></svg>
-                                        </button>
-                                    @endif
-                                    <button type="button" class="btn btn-outline btn-sm btn-timeline"
-                                            data-id="{{ $order->id }}" data-code="{{ $order->code }}" title="Línea de tiempo">
-                                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                    </button>
-                                </td>
-                            </tr>
-                        @endforeach
+                    <tbody id="ordenes-body">
+                        {{-- Filas: partial reutilizable (carga inicial y recarga vía "Recargar") --}}
+                        @include('Orders.partials.order-rows')
                     </tbody>
                 </table>
             </div>
@@ -357,9 +301,10 @@
                 <button type="button" class="modal-close" data-close="modal-docs" style="color:rgba(255,255,255,.7)">×</button>
             </div>
             <div class="modal-body">
+                <strong style="font-size:13px;display:block;margin-bottom:6px">Comprobantes de pago</strong>
                 <div class="table-responsive" style="margin-bottom:14px">
                     <table class="table">
-                        <thead><tr><th>Tipo</th><th>N° Documento</th><th>Monto</th><th>Emisión</th><th>Archivo</th><th></th></tr></thead>
+                        <thead><tr><th>Tipo</th><th>N° Documento</th><th>Monto</th><th>Emisión</th><th>Retención</th><th>Comentario</th><th>Archivo</th><th></th></tr></thead>
                         <tbody id="docs-list"></tbody>
                     </table>
                 </div>
@@ -379,8 +324,54 @@
                         <div class="form-group" style="margin-bottom:8px"><label class="form-label">Monto <span class="required">*</span></label><input type="number" id="dc-amount" step="0.01" min="0" class="form-control"></div>
                         <div class="form-group" style="margin-bottom:8px"><label class="form-label">Emisión <span class="required">*</span></label><input type="date" id="dc-date" class="form-control"></div>
                     </div>
-                    <div class="form-group" style="margin-bottom:8px"><label class="form-label">Archivo (PDF/imagen) <span class="required">*</span></label><input type="file" id="dc-file" class="form-control" accept="application/pdf,image/*"></div>
+                    <div class="form-group" id="dc-retencion-wrap" style="margin-bottom:8px;display:none">
+                        <label class="switch"><input type="checkbox" id="dc-retencion" value="1"><span class="track"></span><span class="switch-label">Tiene retención</span></label>
+                        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Recibo x Honorario exige el anexo <strong>Informe Laboral</strong>; sin retención exige además <strong>Suspensión 4ta/5ta</strong>.</div>
+                    </div>
+                    <div class="form-group" style="margin-bottom:8px"><label class="form-label">Comentario</label><input type="text" id="dc-coment" class="form-control" maxlength="500" placeholder="Opcional"></div>
+                    <div class="form-group" style="margin-bottom:8px">
+                        <label class="form-label">Archivo (PDF/imagen) <span class="required">*</span></label>
+                        <label class="dropzone dz-compact" id="dc-dz" for="dc-file">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 21V9M6 13l6-6 6 6"/><path d="M3 3h18"/></svg>
+                            <div class="hint">Suelta el archivo o haz clic para buscar</div>
+                            <div class="sub">PDF, JPG, PNG · máx. 10 MB</div>
+                            <input type="file" id="dc-file" accept="application/pdf,image/*" style="display:none">
+                        </label>
+                    </div>
                     <div style="text-align:right"><button type="button" id="docs-add" class="btn btn-primary">+ Agregar comprobante</button></div>
+                </fieldset>
+
+                <strong style="font-size:13px;display:block;margin:18px 0 6px">Documentos anexos</strong>
+                <div class="table-responsive" style="margin-bottom:14px">
+                    <table class="table">
+                        <thead><tr><th>Tipo</th><th>Comentario</th><th>Archivo</th><th></th></tr></thead>
+                        <tbody id="anexos-list"></tbody>
+                    </table>
+                </div>
+                <fieldset class="sum-fs">
+                    <legend>Agregar documento anexo</legend>
+                    <div class="sum-grid" style="grid-template-columns:repeat(2,1fr)">
+                        <div class="form-group" style="margin-bottom:8px">
+                            <label class="form-label">Tipo <span class="required">*</span></label>
+                            <select id="an-type" class="form-control">
+                                <option value="">Seleccione...</option>
+                                @foreach ($attachTypes as $val => $desc)
+                                    <option value="{{ $val }}">{{ $desc }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom:8px"><label class="form-label">Comentario</label><input type="text" id="an-coment" class="form-control" maxlength="500" placeholder="Opcional"></div>
+                    </div>
+                    <div class="form-group" style="margin-bottom:8px">
+                        <label class="form-label">Archivo (PDF/imagen) <span class="required">*</span></label>
+                        <label class="dropzone dz-compact" id="an-dz" for="an-file">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 21V9M6 13l6-6 6 6"/><path d="M3 3h18"/></svg>
+                            <div class="hint">Suelta el archivo o haz clic para buscar</div>
+                            <div class="sub">PDF, JPG, PNG · máx. 10 MB</div>
+                            <input type="file" id="an-file" accept="application/pdf,image/*" style="display:none">
+                        </label>
+                    </div>
+                    <div style="text-align:right"><button type="button" id="anexos-add" class="btn btn-primary">+ Agregar anexo</button></div>
                 </fieldset>
             </div>
             <div class="modal-footer">
@@ -388,6 +379,27 @@
             </div>
         </div>
     </div>
+
+    @if ($isGA)
+    {{-- ── MODAL: Aprobación masiva (GA) ── --}}
+    <div class="modal-backdrop" id="modal-bulk" style="display:none">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-header" style="background:var(--text);border-bottom:none">
+                <h3 class="modal-title" style="color:#fff">Aprobar órdenes</h3>
+                <button type="button" class="modal-close" data-close="modal-bulk" style="color:rgba(255,255,255,.7)">×</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin:0;color:var(--text-secondary);font-size:14px;line-height:1.5">
+                    Vas a aprobar <strong id="bulk-modal-count">0</strong> orden(es) en POR REVISAR. Esta acción las envía al siguiente paso del flujo. ¿Confirmas?
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" data-close="modal-bulk">Cancelar</button>
+                <button type="button" id="bulk-confirm" class="btn btn-primary" style="background:var(--green);border-color:var(--green)">Sí, aprobar</button>
+            </div>
+        </div>
+    </div>
+    @endif
 
 @endsection
 
@@ -399,7 +411,7 @@
 document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('filtros-form');
 
-    const table = new DataTable('#tabla-ordenes', {
+    const tableConfig = {
         pageLength: 15,
         order: [],                      // respeta el orden del servidor (latest)
         layout: {
@@ -416,13 +428,17 @@ document.addEventListener('DOMContentLoaded', function () {
             emptyTable: 'No hay órdenes para mostrar',
             paginate: { previous: '← Anterior', next: 'Siguiente →' },
         },
-    });
+    };
+    let table = new DataTable('#tabla-ordenes', tableConfig);
 
     // ── Filtro personalizado por dropdowns (lee data-* de cada fila) ──
     DataTable.ext.search.push(function (settings, data, dataIndex) {
         if (settings.nTable.id !== 'tabla-ordenes') return true;
 
-        const row    = table.row(dataIndex).node();
+        // Fila desde 'settings' (tabla en dibujo), no desde la variable 'table' del closure:
+        // durante el re-init de Recargar aún apunta a la instancia vieja y reventaría.
+        const row    = settings.aoData[dataIndex].nTr;
+        if (!row) return true;
         const fStat  = form.elements['status'].value;
         const fForm  = form.elements['format_id'].value;
         const fArea  = form.elements['area_id'].value;
@@ -444,11 +460,92 @@ document.addEventListener('DOMContentLoaded', function () {
         table.search(this.value).draw();
     });
 
-    // Limpiar
-    document.getElementById('btn-limpiar').addEventListener('click', function () {
-        form.reset();
-        table.search('').draw();
+    // Recargar: limpia filtros + trae datos frescos de la BD (emula AJAX reusando el partial)
+    document.getElementById('btn-recargar').addEventListener('click', async function () {
+        this.disabled = true;
+        window.blockUI && window.blockUI('Actualizando…');
+        try {
+            const res = await fetch("{{ route('orders.rows') }}?_=" + Date.now(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+            const j   = await res.json().catch(() => ({}));
+            if (res.ok && j.status === 1) {
+                table.destroy();                                          // libera DataTables (conserva el DOM)
+                document.getElementById('ordenes-body').innerHTML = j.data.html;   // filas frescas
+                const cnt = document.getElementById('ordenes-count');
+                if (cnt) cnt.textContent = `${j.data.count} orden(es)`;   // actualiza el contador
+                table = new DataTable('#tabla-ordenes', tableConfig);     // re-inicializa
+                @if ($isGA) table.on('draw', gaOnDraw); @endif            // re-engancha selección masiva
+                form.reset();                                            // limpia los inputs de filtro
+                table.search('').draw();
+            } else if (res.status === 419) {
+                (window.showToast || alert)('Tu sesión expiró. Recarga la página (F5).', 'error');
+            } else {
+                (window.showToast || alert)(j.description || 'No se pudo recargar.', 'error');
+            }
+        } catch (e) { (window.showToast || alert)('Error de red al recargar.', 'error'); }
+        window.unblockUI && window.unblockUI();
+        this.disabled = false;
     });
+
+    @if ($isGA)
+    // ── Aprobación masiva (GA) ──
+    const toast = (m, v) => (window.showToast ? window.showToast(m, v) : alert(m));
+    const bulkBar = document.getElementById('bulk-bar');
+    const chkAll  = document.getElementById('chk-all');
+    const mBulk   = document.getElementById('modal-bulk');
+
+    function recount() {
+        const n = document.querySelectorAll('#tabla-ordenes tbody .chk-row:checked').length;
+        document.getElementById('bulk-count').textContent = n;
+        bulkBar.style.display = n ? 'flex' : 'none';
+    }
+    chkAll.addEventListener('change', () => {
+        // Solo marca las que están en POR REVISAR (estado 2)
+        document.querySelectorAll('#tabla-ordenes tbody .chk-row[data-status="2"]').forEach(c => { c.checked = chkAll.checked; });
+        recount();
+    });
+    document.getElementById('tabla-ordenes').addEventListener('change', (e) => {
+        if (e.target.classList.contains('chk-row')) recount();
+    });
+    function gaOnDraw() { chkAll.checked = false; recount(); }   // cambio de página/filtro
+    table.on('draw', gaOnDraw);
+
+    const openBulk  = () => { mBulk.style.display = 'flex'; requestAnimationFrame(() => mBulk.classList.add('show')); document.body.classList.add('modal-open'); };
+    const closeBulk = () => { mBulk.classList.remove('show'); setTimeout(() => mBulk.style.display = 'none', 180); document.body.classList.remove('modal-open'); };
+    mBulk.addEventListener('click', (e) => { if (e.target === mBulk || e.target.closest('[data-close=\"modal-bulk\"]')) closeBulk(); });
+
+    document.getElementById('bulk-approve-btn').addEventListener('click', () => {
+        const checked = [...document.querySelectorAll('#tabla-ordenes tbody .chk-row:checked')];
+        if (!checked.length) return;
+        const noVal = checked.filter(c => c.dataset.status !== '2');
+        if (noVal.length) {
+            toast('No se puede: ' + noVal.length + ' orden(es) seleccionada(s) no están en POR REVISAR. La aprobación masiva solo aplica a ese estado.', 'warning');
+            return;
+        }
+        document.getElementById('bulk-modal-count').textContent = checked.length;
+        openBulk();
+    });
+
+    document.getElementById('bulk-confirm').addEventListener('click', async function () {
+        const ids = [...document.querySelectorAll('#tabla-ordenes tbody .chk-row:checked')].map(c => c.dataset.id);
+        if (!ids.length) return;
+        this.disabled = true; this.textContent = 'Aprobando...';
+        window.blockUI && window.blockUI('Procesando…');
+        try {
+            const res = await fetch("{{ route('orders.bulk-approve') }}", {
+                method: 'POST',
+                headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=\"csrf-token\"]').content },
+                body: JSON.stringify({ ids }),
+            });
+            const j = await res.json().catch(() => ({}));
+            if (res.ok && j.status === 1) { toast(j.description, 'success'); setTimeout(() => location.reload(), 900); return; }
+            if (res.status === 419) { toast('Tu sesión expiró. Recarga la página (F5) e intenta de nuevo.', 'error'); }
+            else { toast(j.description || j.message || ('No se pudo aprobar (HTTP ' + res.status + ').'), 'error'); }
+        } catch (e) { toast('Error de red al aprobar.', 'error'); }
+        window.unblockUI && window.unblockUI();
+        this.disabled = false; this.textContent = 'Sí, aprobar';
+        closeBulk();
+    });
+    @endif
 });
 </script>
 
@@ -538,6 +635,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const timer = setTimeout(close, timeout);
         t.addEventListener('click', () => { clearTimeout(timer); close(); });
     }
+    window.showToast = showToast;   // reutilizable (aprobación masiva GA)
 
     function openM(id) { const el = document.getElementById(id); el.style.display = 'flex'; requestAnimationFrame(() => el.classList.add('show')); document.body.classList.add('modal-open'); }
     function closeM(id) { const el = document.getElementById(id); el.classList.remove('show'); setTimeout(() => el.style.display = 'none', 180); document.body.classList.remove('modal-open'); }
@@ -601,8 +699,8 @@ document.addEventListener('DOMContentLoaded', function () {
             proveedorFs = `
                 <fieldset class="sum-fs"><legend>Proveedor</legend>
                     <div class="sum-grid">
-                        ${cell('RUC', p.ruc)}${cell('Razón social', p.razon_social)}${cell('Contacto', p.contacto)}${cell('Correo', p.email)}
-                        ${cell('Domicilio fiscal', p.direccion)}${cell('Distrito', p.distrito)}${cuenta}
+                        ${cell('RUC', p.ruc)}${cell('Razón social', p.razon_social)}${cell('Contacto', p.contacto)}${cell('Celular', p.celular || '—')}
+                        ${cell('Correo', p.email)}${cell('Domicilio fiscal', p.direccion)}${cell('Distrito', p.distrito)}${cuenta}
                     </div>
                 </fieldset>`;
         }
@@ -630,12 +728,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 <td style="text-align:right">${escc(x.monto)}</td>
                 <td>${escc(x.fecha)}</td>
                 <td class="cell-mono">${x.cod_registro ? escc(x.cod_registro) : '—'}</td>
+                <td>${x.comentario ? escc(x.comentario) : '—'}</td>
                 <td>${x.path ? `<a href="${x.path}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
             </tr>`).join('');
             compsFs = `
                 <fieldset class="sum-fs"><legend>Comprobantes de pago</legend>
                     <div class="table-responsive"><table class="table">
-                        <thead><tr><th>Tipo</th><th>N° Doc</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Archivo</th></tr></thead>
+                        <thead><tr><th>Tipo</th><th>N° Doc</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Comentario</th><th>Archivo</th></tr></thead>
                         <tbody>${rows}</tbody>
                     </table></div>
                 </fieldset>`;
@@ -727,10 +826,15 @@ document.addEventListener('DOMContentLoaded', function () {
         if (dc) {
             currentId = dc.dataset.id;
             document.getElementById('docs-code').textContent = dc.dataset.code;
-            ['dc-type','dc-num','dc-amount','dc-date','dc-file'].forEach(id => document.getElementById(id).value = '');
-            document.getElementById('docs-list').innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:14px">Cargando…</td></tr>`;
+            ['dc-type','dc-num','dc-amount','dc-date','dc-coment','dc-file','an-type','an-coment','an-file'].forEach(id => document.getElementById(id).value = '');
+            document.getElementById('dc-retencion').checked = false;
+            document.getElementById('dc-retencion-wrap').style.display = 'none';
+            resetDz('dc-dz'); resetDz('an-dz');
+            document.getElementById('docs-list').innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:14px">Cargando…</td></tr>`;
+            document.getElementById('anexos-list').innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:14px">Cargando…</td></tr>`;
             openM('modal-docs');
             loadDocs();
+            loadAnexos();
             return;
         }
         const ob = e.target.closest('.btn-observe');
@@ -753,16 +857,24 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Confirmar avance (aprobar/sustentar/conforme/cerrar/reenviar)
     document.getElementById('approve-confirm').addEventListener('click', async function () {
+        if (this.disabled) return;                                  // evita dobles envíos
         this.disabled = true; this.textContent = 'Procesando...';
+        window.blockUI && window.blockUI('Procesando…');            // bloquea toda la pantalla
         try {
             const r = await post(`{{ url('orders') }}/${currentId}/approve`);
             if (r.ok && r.json.status === 1) {
                 showToast(r.json.description, 'success');
                 setTimeout(() => location.reload(), 900);
-                return;
+                return;   // overlay + botón quedan bloqueados hasta recargar
             }
-            showToast(r.json.description || 'No se pudo completar la acción.', 'error');
+            // Mensaje de validación (422 → {message, errors}) o respuesta de negocio (description)
+            const msg = r.json.description
+                || (r.json.errors && Object.values(r.json.errors)[0]?.[0])
+                || r.json.message
+                || 'No se pudo completar la acción.';
+            showToast(msg, 'error');
         } catch (err) { showToast('Error al procesar.', 'error'); }
+        window.unblockUI && window.unblockUI();
         this.disabled = false; this.textContent = currentLabel;
     });
 
@@ -818,8 +930,39 @@ document.addEventListener('DOMContentLoaded', function () {
         this.disabled = false; this.textContent = 'Confirmar rechazo';
     });
 
-    // ── Cargar documentos (comprobantes) ──
+    // ── Cargar documentos (comprobantes + anexos) — AA [102] ──
+    const DOC_RULES = @json($docRules ?? null);
     const docsList = document.getElementById('docs-list');
+    const anexosList = document.getElementById('anexos-list');
+    const escd = (t) => String(t ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+    // Dropzone (arrastrar/soltar + mostrar nombre)
+    function initDropzone(dzId, defaultHint) {
+        const dz = document.getElementById(dzId);
+        if (!dz) return;
+        const hint = dz.querySelector('.hint');
+        const getInput = () => dz.querySelector('input[type=file]');
+        const showName = () => { const i = getInput(); hint.textContent = (i && i.files.length) ? i.files[0].name : defaultHint; };
+        dz.addEventListener('change', showName);
+        dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('over'); });
+        dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+        dz.addEventListener('drop', (e) => {
+            e.preventDefault(); dz.classList.remove('over');
+            const i = getInput();
+            if (i && e.dataTransfer.files.length) { i.files = e.dataTransfer.files; showName(); }
+        });
+        dz.__resetHint = () => { hint.textContent = defaultHint; };
+    }
+    initDropzone('dc-dz', 'Suelta el archivo o haz clic para buscar');
+    initDropzone('an-dz', 'Suelta el archivo o haz clic para buscar');
+    const resetDz = (id) => { const dz = document.getElementById(id); dz && dz.__resetHint && dz.__resetHint(); };
+
+    // Switch "Tiene retención": solo para Recibo x Honorario
+    document.getElementById('dc-type').addEventListener('change', function () {
+        const esRecibo = DOC_RULES && String(this.value) === String(DOC_RULES.recibo);
+        document.getElementById('dc-retencion-wrap').style.display = esRecibo ? '' : 'none';
+        if (!esRecibo) document.getElementById('dc-retencion').checked = false;
+    });
 
     async function loadDocs() {
         try {
@@ -827,19 +970,20 @@ document.addEventListener('DOMContentLoaded', function () {
             const json = await res.json();
             renderDocs(json.data || []);
         } catch (e) {
-            docsList.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--red);padding:14px">Error al cargar.</td></tr>`;
+            docsList.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--red);padding:14px">Error al cargar.</td></tr>`;
         }
     }
     function renderDocs(list) {
-        if (!list.length) { docsList.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">Sin comprobantes aún.</td></tr>`; return; }
-        const esc = (t) => String(t ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+        if (!list.length) { docsList.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">Sin comprobantes aún.</td></tr>`; return; }
         docsList.innerHTML = list.map(d => `
             <tr>
-                <td>${esc(d.type_label)}</td>
-                <td class="cell-mono">${esc(d.document_number)}</td>
-                <td class="cell-strong">${esc(d.amount)}</td>
-                <td>${esc(d.emission_date)}</td>
-                <td>${d.path ? `<a href="${esc(d.path)}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
+                <td>${escd(d.type_label)}</td>
+                <td class="cell-mono">${escd(d.document_number)}</td>
+                <td class="cell-strong">${escd(d.amount)}</td>
+                <td>${escd(d.emission_date)}</td>
+                <td>${d.has_retention === true ? '<span class="status status-green">Con retención</span>' : (d.has_retention === false ? '<span class="status status-yellow">Sin retención</span>' : '—')}</td>
+                <td>${d.comentario ? escd(d.comentario) : '—'}</td>
+                <td>${d.path ? `<a href="${escd(d.path)}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
                 <td style="text-align:center"><button type="button" class="btn-remove docs-rm" data-fid="${d.id}" style="border:none;background:none;color:var(--red);cursor:pointer;font-size:18px">×</button></td>
             </tr>`).join('');
     }
@@ -850,16 +994,21 @@ document.addEventListener('DOMContentLoaded', function () {
         const num  = document.getElementById('dc-num').value.trim();
         const amt  = document.getElementById('dc-amount').value;
         const date = document.getElementById('dc-date').value;
+        const coment = document.getElementById('dc-coment').value.trim();
         const file = document.getElementById('dc-file').files[0];
         if (!type || !num || !amt || !date || !file) { showToast('Completa todos los campos del comprobante.', 'warning'); return; }
         this.disabled = true; this.textContent = 'Subiendo...';
         const fd = new FormData();
         fd.append('type_file', type); fd.append('document_number', num); fd.append('amount', amt);
-        fd.append('emission_date', date); fd.append('file', file);
+        fd.append('emission_date', date); fd.append('comentario', coment); fd.append('file', file);
+        if (document.getElementById('dc-retencion').checked) fd.append('has_retention', '1');
         const r = await post(`{{ url('orders') }}/${currentId}/comprobante`, fd);
         if (r.ok && r.json.status === 1) {
             showToast(r.json.description, 'success');
-            ['dc-type','dc-num','dc-amount','dc-date','dc-file'].forEach(id => document.getElementById(id).value = '');
+            ['dc-type','dc-num','dc-amount','dc-date','dc-coment','dc-file'].forEach(id => document.getElementById(id).value = '');
+            document.getElementById('dc-retencion').checked = false;
+            document.getElementById('dc-retencion-wrap').style.display = 'none';
+            resetDz('dc-dz');
             loadDocs();
         } else { showToast(r.json.description || 'No se pudo cargar.', 'error'); }
         this.disabled = false; this.textContent = '+ Agregar comprobante';
@@ -872,6 +1021,54 @@ document.addEventListener('DOMContentLoaded', function () {
         rm.disabled = true;
         const r = await post(`{{ url('orders') }}/${currentId}/comprobante/${rm.dataset.fid}/delete`);
         if (r.ok && r.json.status === 1) { showToast(r.json.description, 'success'); loadDocs(); }
+        else { showToast(r.json.description || 'No se pudo eliminar.', 'error'); rm.disabled = false; }
+    });
+
+    // ── Documentos anexos (AA [102]) ──
+    async function loadAnexos() {
+        try {
+            const res = await fetch(`{{ url('orders') }}/${currentId}/anexos`, { headers: { 'Accept': 'application/json' } });
+            const json = await res.json();
+            renderAnexos(json.data || []);
+        } catch (e) {
+            anexosList.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--red);padding:14px">Error al cargar.</td></tr>`;
+        }
+    }
+    function renderAnexos(list) {
+        if (!list.length) { anexosList.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">Sin anexos aún.</td></tr>`; return; }
+        anexosList.innerHTML = list.map(d => `
+            <tr>
+                <td>${escd(d.type_label)}</td>
+                <td>${d.comentario ? escd(d.comentario) : '—'}</td>
+                <td>${d.path ? `<a href="${escd(d.path)}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
+                <td style="text-align:center"><button type="button" class="btn-remove an-rm" data-fid="${d.id}" style="border:none;background:none;color:var(--red);cursor:pointer;font-size:18px">×</button></td>
+            </tr>`).join('');
+    }
+
+    document.getElementById('anexos-add').addEventListener('click', async function () {
+        const type = document.getElementById('an-type').value;
+        const coment = document.getElementById('an-coment').value.trim();
+        const file = document.getElementById('an-file').files[0];
+        if (!type || !file) { showToast('Selecciona el tipo y adjunta el archivo del anexo.', 'warning'); return; }
+        this.disabled = true; this.textContent = 'Subiendo...';
+        const fd = new FormData();
+        fd.append('type_file', type); fd.append('comentario', coment); fd.append('file', file);
+        const r = await post(`{{ url('orders') }}/${currentId}/anexo`, fd);
+        if (r.ok && r.json.status === 1) {
+            showToast(r.json.description, 'success');
+            ['an-type','an-coment','an-file'].forEach(id => document.getElementById(id).value = '');
+            resetDz('an-dz');
+            loadAnexos();
+        } else { showToast(r.json.description || 'No se pudo cargar.', 'error'); }
+        this.disabled = false; this.textContent = '+ Agregar anexo';
+    });
+
+    anexosList.addEventListener('click', async (e) => {
+        const rm = e.target.closest('.an-rm');
+        if (!rm) return;
+        rm.disabled = true;
+        const r = await post(`{{ url('orders') }}/${currentId}/anexo/${rm.dataset.fid}/delete`);
+        if (r.ok && r.json.status === 1) { showToast(r.json.description, 'success'); loadAnexos(); }
         else { showToast(r.json.description || 'No se pudo eliminar.', 'error'); rm.disabled = false; }
     });
 

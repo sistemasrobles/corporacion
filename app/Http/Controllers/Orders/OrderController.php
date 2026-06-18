@@ -17,9 +17,11 @@ use App\Models\SupplierAccount;
 use App\Models\OrderDetail;
 use App\Models\OrderProduct;
 use App\Models\OrderFile;
+use App\Models\OrderEvent;
 use App\Models\OrderQuota;
 use App\Models\OrderHistory;
 use App\Models\OrderSequence;
+use App\Models\Type;
 use App\Models\TypeUser;
 use App\Models\UserType;
 use App\Models\User;
@@ -32,8 +34,14 @@ class OrderController extends Controller
 
     public function create()
     {
-        if (!in_array(auth()->user()->user_type, ['JA', 'AA', 'GA'], true)) {
+        $user = auth()->user();
+        if (!in_array($user->user_type, ['JA', 'AA', 'GA'], true)) {
             abort(403);
+        }
+
+        // El JA usa un formulario liviano (solicitud); el AA luego la completa.
+        if ($user->user_type === 'JA') {
+            return $this->createJa();
         }
 
         return view('Orders.create', $this->formData() + [
@@ -42,7 +50,145 @@ class OrderController extends Controller
             'acts'      => ['approve' => false, 'observe' => false, 'reject' => false],
             'obsTypes'  => collect(),
             'orderMeta' => null,
+            // El GA elige la Gestión (y con ella el AA responsable); el AA no la ve.
+            'gestiones' => $user->user_type === 'GA' ? $this->aaGestiones() : collect(),
         ]);
+    }
+
+    /**
+     * Formulario de solicitud del JA (réplica del de Filament, simplificado).
+     * Sin moneda/monto/proveedor/cuotas: solo clasificación, gestión, fecha de
+     * vencimiento, título, justificación y una cotización opcional. El responsable
+     * se resuelve por la Gestión (type_user) y la orden nace en CREADO para que el
+     * AA asignado la complete.
+     */
+    /**
+     * Gestiones seleccionables: solo las que tienen un responsable de rol AA en type_user.
+     * Cada item: [id, descripcion, responsible]. Se excluye "GESTION GLOBAL" (responsable GA).
+     * Usada por el formulario del JA y por el del GA (que también elige a quién asignar).
+     */
+    private function aaGestiones()
+    {
+        $typeUsers = TypeUser::with('user')->get()
+            ->filter(fn ($tu) => optional($tu->user)->user_type === 'AA')
+            ->keyBy('type_id');
+
+        return Type::whereIn('id', $typeUsers->keys())
+            ->orderBy('descripcion')
+            ->get()
+            ->map(fn ($t) => [
+                'id'          => $t->id,
+                'descripcion' => $t->descripcion,
+                'responsible' => $typeUsers[$t->id]->user->name ?? '—',
+            ])
+            ->values();
+    }
+
+    private function createJa()
+    {
+        $gestiones = $this->aaGestiones();
+        $rules = $this->docRules();
+
+        return view('Orders.create-ja', [
+            'formats'         => Format::orderBy('description')->pluck('description', 'id'),
+            'companies'       => Company::orderBy('name')->pluck('name', 'id'),
+            'gestiones'       => $gestiones,
+            'cotizacionLabel' => $rules['cotizacionLabel'] ?? 'Cotización',
+        ]);
+    }
+
+    /**
+     * Guarda la solicitud del JA: crea la orden en CREADO (1) con el responsable
+     * derivado de la Gestión y, si se adjunta, registra la cotización como anexo.
+     */
+    public function storeJa(Request $request)
+    {
+        $user = auth()->user();
+        if ($user->user_type !== 'JA') {
+            abort(403);
+        }
+
+        $data = $request->validate([
+            'company_id'      => ['required'],
+            'format_id'       => ['required'],
+            'category_id'     => ['required'],
+            'type_id'         => ['required', 'exists:types,id'],
+            'title'           => ['required', 'max:250'],
+            'justification'   => ['required', 'max:250'],
+            'expiration_date' => ['required', 'date', 'after_or_equal:today'],
+            'cotizacion'      => ['nullable', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:5120'],
+        ], [
+            'expiration_date.after_or_equal' => 'La fecha de vencimiento no puede ser anterior a hoy.',
+            'justification.max'              => 'La justificación no puede superar los 250 caracteres.',
+            'cotizacion.max'                 => 'La cotización no puede superar los 5 MB.',
+            'cotizacion.mimes'               => 'La cotización debe ser PDF, JPG o PNG.',
+        ]);
+
+        // Responsable de la orden según la Gestión elegida (tabla intermedia type_user).
+        $responsible = TypeUser::where('type_id', $data['type_id'])->value('user_id');
+        if (!$responsible) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'type_id' => 'La gestión seleccionada no tiene un responsable asignado.',
+            ]);
+        }
+
+        $format = Format::findOrFail($data['format_id']);
+        $rules  = $this->docRules();
+
+        $order = DB::transaction(function () use ($data, $user, $format, $request, $responsible, $rules) {
+            $this->syncSequences(['orders', 'order_details', 'order_history']);
+
+            $order = Order::create([
+                'company_id'       => $data['company_id'],
+                'status'           => 1,                       // CREADO → el AA responsable la completa
+                'title'            => $data['title'],
+                'type_id'          => $data['type_id'],
+                'format_id'        => $format->abrev,
+                'user_responsible' => $responsible,
+                'created_by'       => $user->id,
+                'updated_by'       => $user->id,
+            ]);
+            $this->generateCode($order, $format->abrev);
+
+            OrderDetail::create([
+                'order_id'         => $order->id,
+                'required_date'    => now()->toDateString(),
+                'period'           => now()->format('Ym'),
+                'expiration_date'  => $data['expiration_date'],
+                'category_id'      => $data['category_id'],
+                'justification'    => $data['justification'],
+                'suggested_amount' => 0,
+                'created_by'       => $user->id,
+                'updated_by'       => $user->id,
+            ]);
+
+            // Cotización opcional → anexo tipo COTIZACIÓN (resuelto dinámicamente).
+            if ($file = $request->file('cotizacion')) {
+                OrderFile::create([
+                    'type_file'  => $rules['cotizacion'] ?? null,
+                    'order_id'   => $order->id,
+                    'path'       => $file->store('orders/docs', 'public'),
+                    'principal'  => 0,
+                    'created_by' => $user->id, 'updated_by' => $user->id,
+                ]);
+            }
+
+            // Historial: el JA crea y la asigna al AA responsable (estado CREADO).
+            OrderHistory::create([
+                'from_user'   => 'JA', 'to_user'   => 'AA',
+                'from_status' => 0,    'to_status' => 1,
+                'coment'      => '', 'order_id' => $order->id,
+                'created_by'  => $user->id, 'updated_by' => $user->id,
+            ]);
+
+            return $order;
+        });
+
+        return response()->json($this->setRpta(1, 'Solicitud creada correctamente', [
+            'id'       => $order->id,
+            'code'     => $order->code,
+            'redirect' => route('orders.view'),
+        ]));
     }
 
     /** Listas de opciones compartidas por create() y edit(). */
@@ -64,7 +210,150 @@ class OrderController extends Controller
             'fraccionadoIds' => Master::where('main', 8)->whereNotNull('description')
                 ->get()->filter(fn ($m) => stripos($m->description, 'fraccionado') !== false)
                 ->pluck('id')->values(),
+            'docRules'      => $this->docRules(),
         ];
+    }
+
+    /**
+     * Regla "Recibo x Honorario": resuelve dinámicamente los `value` de masters
+     * (sin hardcodear). Si hay un comprobante Recibo x Honorario → exige anexo
+     * Informe Laboral; y si NO tiene retención → exige además Suspensión 4ta/5ta.
+     */
+    private function docRules(): array
+    {
+        $find = fn (int $main, string $like) => Master::where('main', $main)
+            ->whereRaw('UPPER(description) LIKE ?', [$like])
+            ->orderBy('value')->first();
+
+        $recibo     = $find(15, '%HONORARIO%');
+        $informe    = $find(18, '%INFORME LABORAL%');
+        $suspension = $find(18, '%SUSPENSION%4TA%');
+        $factura    = $find(15, '%FACTURA%');
+        $boleta     = $find(15, '%BOLETA%');
+        $cotizacion = $find(18, '%COTIZACION%');
+        $guia       = $find(18, '%GUIA%REMISION%');
+        $evidencia  = $find(18, '%EVIDENCIA%');
+        $proyectos  = Area::whereRaw('UPPER(description) LIKE ?', ['%PROYECTOS%'])->first();
+        $ordenServ  = Format::whereRaw('UPPER(description) LIKE ?', ['%SERVICIO%'])->first();
+
+        return [
+            'recibo'            => $recibo?->value,
+            'informe'           => $informe?->value,
+            'suspension'        => $suspension?->value,
+            'informeLabel'      => $informe?->description ?? 'Informe Laboral',
+            'suspensionLabel'   => $suspension?->description ?? 'Suspensión 4ta/5ta',
+            // Programación General: comprobante Factura/Boleta y, si área Proyectos, anexos Cotización + Guía
+            'factura'           => $factura?->value,
+            'boleta'            => $boleta?->value,
+            'cotizacion'        => $cotizacion?->value,
+            'guia'              => $guia?->value,
+            'evidencia'         => $evidencia?->value,
+            'cotizacionLabel'   => $cotizacion?->description ?? 'Cotización',
+            'guiaLabel'         => $guia?->description ?? 'Guía de Remisión',
+            'evidenciaLabel'    => $evidencia?->description ?? 'Evidencias',
+            'proyectosArea'     => $proyectos?->id,
+            'ordenServicio'     => $ordenServ?->id,   // tipo de orden = Orden de Servicio
+        ];
+    }
+
+    /** ¿La condición de pago es fraccionada? (masters main 8) */
+    private function esFraccionado($conditionId): bool
+    {
+        return Master::where('main', 8)->where('id', $conditionId)
+            ->whereRaw('UPPER(description) LIKE ?', ['%FRACCIONADO%'])->exists();
+    }
+
+    /**
+     * Reglas de la orden al registrar/editar:
+     *  1) Si NO es fraccionado → fecha de vencimiento obligatoria.
+     *  2) Programación GENERAL → comprobante Factura o Boleta obligatorio.
+     *  3) GENERAL + área Proyectos → anexos Cotización y Guía de Remisión obligatorios.
+     */
+    private function validarReglasOrden(bool $urgente, $conditionId, $expirationDate, $areaId, array $compTypes, array $anexoTypes, $planCuotasJson = null, bool $requirePlan = true, $formatId = null): void
+    {
+        if ($this->esFraccionado($conditionId)) {
+            // Fraccionado: el plan de cuotas es obligatorio (se omite en edición restringida)
+            $plan = json_decode($planCuotasJson ?? '[]', true) ?: [];
+            if ($requirePlan && !$plan) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'plan_cuotas' => 'Debes configurar el plan de cuotas para el pago fraccionado.',
+                ]);
+            }
+        } elseif (empty($expirationDate)) {
+            // No fraccionado (al contado/crédito): la fecha de vencimiento es obligatoria
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'expiration_date' => 'La fecha de vencimiento es obligatoria cuando el pago no es fraccionado.',
+            ]);
+        }
+
+        if ($urgente) return;   // reglas 2 y 3 solo aplican a GENERAL
+
+        $r    = $this->docRules();
+        $comp = array_map('strval', $compTypes);
+        $tieneFacturaBoleta = ($r['factura'] && in_array((string) $r['factura'], $comp, true))
+            || ($r['boleta'] && in_array((string) $r['boleta'], $comp, true));
+        if (!$tieneFacturaBoleta) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'comprobantes' => 'En programación General debes adjuntar un comprobante de pago (Factura o Boleta).',
+            ]);
+        }
+
+        if ($r['proyectosArea'] && (string) $areaId === (string) $r['proyectosArea']) {
+            $anx    = array_map('strval', $anexoTypes);
+            $faltan = [];
+            if ($r['cotizacion'] && !in_array((string) $r['cotizacion'], $anx, true)) $faltan[] = $r['cotizacionLabel'];
+            if ($r['guia'] && !in_array((string) $r['guia'], $anx, true))             $faltan[] = $r['guiaLabel'];
+            // Si además es Orden de Servicio → exige Evidencias
+            $esServicio = $r['ordenServicio'] && (string) $formatId === (string) $r['ordenServicio'];
+            if ($esServicio && $r['evidencia'] && !in_array((string) $r['evidencia'], $anx, true)) $faltan[] = $r['evidenciaLabel'];
+            if ($faltan) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'documentos' => 'Para el área Proyectos (programación General) son obligatorios los anexos: ' . implode(', ', $faltan) . '.',
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Valida la regla de Recibo x Honorario sobre los comprobantes/anexos enviados.
+     * $comprobantes: array de ['type_file' => ..., 'has_retention' => bool].
+     * $anexoTypes: array de los type_file de los documentos anexos presentes.
+     * Lanza ValidationException si falta algún anexo obligatorio.
+     */
+    private function validarReciboHonorario(array $comprobantes, array $anexoTypes): void
+    {
+        $r = $this->docRules();
+        if (!$r['recibo']) return;
+
+        $recibos = array_filter($comprobantes, fn ($c) => (string) ($c['type_file'] ?? '') === (string) $r['recibo']);
+        if (!$recibos) return;
+
+        $errores = [];
+        if ($r['informe'] && !in_array((string) $r['informe'], array_map('strval', $anexoTypes), true)) {
+            $errores[] = 'Para un Recibo x Honorario debes adjuntar el documento anexo "' . $r['informeLabel'] . '".';
+        }
+        $sinRetencion = array_filter($recibos, fn ($c) => empty($c['has_retention']));
+        if ($sinRetencion && $r['suspension'] && !in_array((string) $r['suspension'], array_map('strval', $anexoTypes), true)) {
+            $errores[] = 'El Recibo x Honorario sin retención exige el documento anexo "' . $r['suspensionLabel'] . '".';
+        }
+
+        if ($errores) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['documentos' => $errores]);
+        }
+    }
+
+    /** La suma del plan de cuotas debe coincidir con el total de la orden (tolerancia 0.01). */
+    private function validarSumaCuotas($planCuotasJson, float $total): void
+    {
+        $plan = json_decode($planCuotasJson ?? '[]', true) ?: [];
+        if (!$plan) return;
+        $sum = array_sum(array_map(fn ($c) => floatval($c['monto'] ?? 0), $plan));
+        if (abs($sum - $total) > 0.01) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'plan_cuotas' => 'La suma de las cuotas (' . number_format($sum, 2)
+                    . ') no coincide con el total de la orden (' . number_format($total, 2) . ').',
+            ]);
+        }
     }
 
     /** Vista de solo lectura con toda la información de la orden. */
@@ -104,13 +393,18 @@ class OrderController extends Controller
             'descuentoTipo' => Master::find($d?->discount_type_id)?->description,
         ];
 
+        // Nombres de quien subió cada archivo (created_by), precargados para evitar N+1.
+        $uploaderNames = User::whereIn('id', $order->files->pluck('created_by')->filter()->unique())->pluck('name', 'id');
+
         $comprobantes = $order->files->filter($isComprobante)->map(fn ($f) => [
             'label'    => $voucherLabels[$f->type_file] ?? $f->type_file,
             'document' => $f->document_number,
             'amount'   => $f->amount,
             'date'     => $f->emission_date,
             'cod_reg'  => $f->registration_code,
+            'coment'   => $f->comentario,
             'subida'   => $f->created_at ? \Carbon\Carbon::parse($f->created_at)->format('d/m/Y H:i') : null,
+            'uploader' => $uploaderNames[$f->created_by] ?? '—',
             'path'     => $f->path,
         ])->values();
 
@@ -118,11 +412,21 @@ class OrderController extends Controller
             'label'      => $attachLabels[$f->type_file] ?? $f->type_file,
             'comentario' => $f->comentario,
             'subida'     => $f->created_at ? \Carbon\Carbon::parse($f->created_at)->format('d/m/Y H:i') : null,
+            'uploader'   => $uploaderNames[$f->created_by] ?? '—',
             'path'       => $f->path,
         ])->values();
 
         $statusLabel = Status::find($order->status)?->description ?? $order->status;
         $statusClass = $this->statusClass((int) $order->status);
+
+        // Quién subió la constancia de cada cuota: del último evento 'constancia_abono' (registro
+        // append-only). Mapa [quota_id => nombre], con los nombres precargados (sin N+1).
+        $constanciaEvents = OrderEvent::where('order_id', $order->id)
+            ->where('event_type', 'constancia_abono')
+            ->orderByDesc('id')->get(['order_quota_id', 'created_by']);
+        $evUploaderNames = User::whereIn('id', $constanciaEvents->pluck('created_by')->filter()->unique())->pluck('name', 'id');
+        $constanciaUploaders = $constanciaEvents->groupBy('order_quota_id')
+            ->map(fn ($evs) => $evUploaderNames[$evs->first()->created_by] ?? '—');
 
         return view('Orders.show', [
             'order'           => $order,
@@ -133,9 +437,11 @@ class OrderController extends Controller
             'statusClass'     => $statusClass,
             'supplier'        => $d?->supplier,
             'selectedAccount' => $d?->supplier_account_id,
+            'destAccount'     => $this->resolveDestAccount($d),   // cuenta destino usada por la orden (snapshot)
             'comprobantes'    => $comprobantes,
             'documentos'      => $documentos,
             'cuotas'          => $order->quotas->sortBy('quota_number')->values(),
+            'constanciaUploaders' => $constanciaUploaders,
             'canEdit'         => $this->canEditRecord($order),
         ]);
     }
@@ -195,6 +501,7 @@ class OrderController extends Controller
                 'address'  => $supplier->address,
                 'district' => $supplier->district,
                 'contact'  => $supplier->contact,
+                'phone'    => $supplier->phone,
                 'email'    => $supplier->email,
                 'accounts' => $supplier->accounts->map(fn ($a) => [
                     'id' => $a->id, 'bank' => $a->bank, 'currency' => $a->currency,
@@ -216,6 +523,8 @@ class OrderController extends Controller
                 'document_number' => $f->document_number,
                 'amount'          => $f->amount,
                 'emission_date'   => $f->emission_date,
+                'has_retention'   => $f->has_retention,
+                'comentario'      => $f->comentario,
                 'path'            => $f->path,
             ])->values(),
 
@@ -234,8 +543,9 @@ class OrderController extends Controller
             ])->values(),
         ];
 
-        $acts       = $this->orderActions($order);
-        $restricted = $this->isRestrictedEdit($order);
+        $acts           = $this->orderActions($order);
+        $restricted     = $this->isRestrictedEdit($order);
+        $scheduleLocked = $this->isScheduleLocked($order);   // programación bloqueada (post-aprobación GA)
         $obsTypes  = Master::where('main', 20)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
         $orderMeta = [
             'creador'     => User::find($order->created_by)?->name ?? '—',
@@ -266,7 +576,7 @@ class OrderController extends Controller
             }
         }
 
-        return view('Orders.create', $this->formData() + compact('order', 'prefill', 'acts', 'restricted', 'obsTypes', 'orderMeta', 'obsInfo'));
+        return view('Orders.create', $this->formData() + compact('order', 'prefill', 'acts', 'restricted', 'scheduleLocked', 'obsTypes', 'orderMeta', 'obsInfo'));
     }
 
     /** Guarda los cambios de una orden y la avanza en el flujo (porta saveFullOrder). */
@@ -305,6 +615,12 @@ class OrderController extends Controller
             ]);
         }
 
+        // La programación (urgente/general) define la rama del flujo. Una vez que el GA aprobó,
+        // cambiarla desincronizaría la máquina de estados → se fuerza desde la BD (ignora el form).
+        if ($this->isScheduleLocked($order)) {
+            $request->merge(['payment_schedule_id' => $order->payment_schedule_id ?? $order->detail?->payment_schedule_id]);
+        }
+
         $data = $request->validate([
             'company_id'          => ['required'],
             'format_id'           => ['required'],
@@ -316,7 +632,7 @@ class OrderController extends Controller
             'cc_ids'              => ['required', 'array', 'min:1'],
             'justification'       => ['required', 'max:500'],
             'supplier_id'         => ['required'],
-            'supplier_account_id' => ['nullable'],
+            'supplier_account_id' => ['required'],
             'items'               => ['required', 'array', 'min:1'],
             'items.*.description' => ['required', 'string'],
             'items.*.quantity'    => ['required', 'numeric', 'min:1'],
@@ -332,11 +648,42 @@ class OrderController extends Controller
             'keep_files'          => ['nullable', 'array'],
             'comprobantes'        => ['nullable', 'array'],
             'documentos'          => ['nullable', 'array'],
+        ], [
+            'supplier_account_id.required' => 'Selecciona la cuenta bancaria del proveedor.',
         ]);
 
-        $format = Format::findOrFail($data['format_id']);
+        // Regla Recibo x Honorario sobre el conjunto final de archivos (conservados + nuevos)
+        $keptFiles  = OrderFile::where('order_id', $order->id)
+            ->whereIn('id', array_map('intval', (array) ($data['keep_files'] ?? [])) ?: [0])->get();
+        $compsFinal = $keptFiles->filter(fn ($f) => $f->document_number || $f->amount)
+            ->map(fn ($f) => ['type_file' => $f->type_file, 'has_retention' => $f->has_retention])->values()->all();
+        foreach ($request->input('comprobantes', []) as $cb) {
+            $compsFinal[] = ['type_file' => $cb['type_file'] ?? null, 'has_retention' => !empty($cb['has_retention'])];
+        }
+        $anexosFinal = $keptFiles->reject(fn ($f) => $f->document_number || $f->amount)->pluck('type_file')->all();
+        foreach ($request->input('documentos', []) as $dn) {
+            $anexosFinal[] = $dn['type'] ?? null;
+        }
+        $this->validarReciboHonorario($compsFinal, $anexosFinal);
 
-        DB::transaction(function () use ($order, $user, $data, $format, $request, $restricted) {
+        // Reglas de programación: vencimiento (no fraccionado), comprobante (General), anexos (Proyectos)
+        $urgenteUpd = stripos(PaymentSchedule::find($data['payment_schedule_id'])?->name ?? '', 'urgente') !== false;
+        $this->validarReglasOrden(
+            $urgenteUpd,
+            $data['condition_payment'],
+            $data['expiration_date'] ?? null,
+            $data['area_id'],
+            array_map(fn ($c) => $c['type_file'] ?? null, $compsFinal),
+            $anexosFinal,
+            $data['plan_cuotas'] ?? null,
+            !$restricted,   // en edición restringida las cuotas no se tocan → no exigir plan
+            $data['format_id']
+        );
+
+        $format = Format::findOrFail($data['format_id']);
+        $rules  = $this->docRules();
+
+        DB::transaction(function () use ($order, $user, $data, $format, $request, $restricted, $rules) {
             $this->syncSequences(['orders', 'order_details', 'order_products', 'order_history', 'orders_quotas']);
 
             // Totales
@@ -350,6 +697,12 @@ class OrderController extends Controller
                 $pct      = floatval($data['discount_type_id']);
                 $discount = round($total * $pct / 100, 2);
                 $amtNeto  = round($total - $discount, 2);
+            }
+
+            // El plan de cuotas (si hay) debe sumar el total de la orden.
+            // En edición restringida las cuotas no se tocan, así que se omite.
+            if (!$restricted) {
+                $this->validarSumaCuotas($data['plan_cuotas'] ?? null, $amtNeto);
             }
 
             // Avance de flujo
@@ -393,6 +746,7 @@ class OrderController extends Controller
                 'items'               => null,
                 'observation'         => $data['observation'] ?? null,
                 'updated_by'          => $user->id,
+                ...$this->destAccountSnapshot($data['supplier_account_id'] ?? null),   // snapshot cuenta destino
             ]);
 
             // Productos (reemplazar)
@@ -433,12 +787,14 @@ class OrderController extends Controller
                 if ($file = $request->file("comprobantes.$i.path")) {
                     $path = $file->store('orders/vouchers', 'public');
                 }
+                $esRecibo = $rules['recibo'] && (string) ($cb['type_file'] ?? '') === (string) $rules['recibo'];
                 OrderFile::create([
-                    'id'              => $this->fileId($order->id, "cb-$i"),
                     'type_file'       => $cb['type_file'] ?? null,
                     'document_number' => $cb['document_number'] ?? null,
                     'amount'          => $cb['amount'] ?? null,
                     'emission_date'   => $cb['emission_date'] ?? null,
+                    'has_retention'   => $esRecibo ? !empty($cb['has_retention']) : null,
+                    'comentario'      => $cb['comentario'] ?? null,
                     'order_id'        => $order->id,
                     'path'            => $path,
                     'principal'       => 1,
@@ -450,7 +806,6 @@ class OrderController extends Controller
                     continue;
                 }
                 OrderFile::create([
-                    'id'         => $this->fileId($order->id, "dn-$i"),
                     'type_file'  => $dn['type'] ?? null,
                     'order_id'   => $order->id,
                     'path'       => $file->store('orders/docs', 'public'),
@@ -562,7 +917,7 @@ class OrderController extends Controller
             'cc_ids'              => ['required', 'array', 'min:1'],
             'justification'       => ['required', 'max:500'],
             'supplier_id'         => ['required'],
-            'supplier_account_id' => ['nullable'],
+            'supplier_account_id' => ['required'],
             'items'               => ['required', 'array', 'min:1'],
             'items.*.description' => ['required', 'string'],
             'items.*.quantity'    => ['required', 'numeric', 'min:1'],
@@ -570,22 +925,64 @@ class OrderController extends Controller
             'payment_id'          => ['required'],
             'condition_payment'   => ['required'],
             'payment_schedule_id' => ['required'],
-            'expiration_date'     => ['nullable', 'date'],
+            'expiration_date'     => ['nullable', 'date', 'after_or_equal:today'],
             'discount_type_id'    => ['nullable'],
             'quotas'              => ['nullable'],
             'plan_cuotas'         => ['nullable'],
             'observation'         => ['nullable'],
             'comprobantes'        => ['nullable', 'array'],
             'documentos'          => ['nullable', 'array'],
+            // Gestión: obligatoria para el GA (elige a quién asignar); opcional para el resto.
+            'type_id'             => [$user->user_type === 'GA' ? 'required' : 'nullable', 'exists:types,id'],
+        ], [
+            'type_id.required'    => 'Selecciona el Tipo de Gestión (define el responsable de la orden).',
+            'supplier_account_id.required' => 'Selecciona la cuenta bancaria del proveedor.',
+            'expiration_date.after_or_equal' => 'La fecha de vencimiento no puede ser anterior a hoy.',
+            'justification.max'              => 'La justificación no puede superar los 500 caracteres.',
         ]);
 
-        $format = Format::findOrFail($data['format_id']);
+        // Cronograma de cuotas: ninguna fecha de vencimiento puede ser anterior a hoy.
+        foreach (json_decode($data['plan_cuotas'] ?? '[]', true) ?: [] as $i => $cuota) {
+            $f = $cuota['fecha_vencimiento'] ?? null;
+            if ($f && \Carbon\Carbon::parse($f)->startOfDay()->lt(now()->startOfDay())) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'plan_cuotas' => 'La fecha de la cuota ' . ($i + 1) . ' no puede ser anterior a hoy.',
+                ]);
+            }
+        }
 
-        $order = DB::transaction(function () use ($data, $user, $format, $request) {
+        // Regla Recibo x Honorario → anexos obligatorios (Informe Laboral / Suspensión)
+        $this->validarReciboHonorario(
+            $request->input('comprobantes', []),
+            array_map(fn ($d) => $d['type'] ?? null, $request->input('documentos', []))
+        );
+
+        // Reglas de programación: vencimiento (no fraccionado), comprobante (General), anexos (Proyectos)
+        $urgente = stripos(PaymentSchedule::find($data['payment_schedule_id'])?->name ?? '', 'urgente') !== false;
+        $this->validarReglasOrden(
+            $urgente,
+            $data['condition_payment'],
+            $data['expiration_date'] ?? null,
+            $data['area_id'],
+            array_map(fn ($c) => $c['type_file'] ?? null, $request->input('comprobantes', [])),
+            array_map(fn ($d) => $d['type'] ?? null, $request->input('documentos', [])),
+            $data['plan_cuotas'] ?? null,
+            true,
+            $data['format_id']
+        );
+
+        $format = Format::findOrFail($data['format_id']);
+        $rules  = $this->docRules();
+
+        $order = DB::transaction(function () use ($data, $user, $format, $request, $rules) {
             // Evita choques de secuencias tras migrar de MySQL
             $this->syncSequences(['orders', 'order_details', 'order_products', 'order_history', 'orders_quotas']);
 
-            $typeId = TypeUser::where('user_id', $user->id)->first()?->type_id;
+            // Gestión: el GA la elige en el formulario (combo); el resto usa la suya (type_user
+            // del creador). Fallback al mapeo del creador si no llega type_id.
+            $typeId = $request->filled('type_id')
+                ? (int) $request->input('type_id')
+                : TypeUser::where('user_id', $user->id)->value('type_id');
 
             // Estado inicial + movimiento de historial según el rol que crea y la programación
             $urgente = stripos(PaymentSchedule::find($data['payment_schedule_id'])?->name ?? '', 'urgente') !== false;
@@ -613,6 +1010,9 @@ class OrderController extends Controller
                 $amtNeto  = round($total - $discount, 2);
             }
 
+            // El plan de cuotas (si hay) debe sumar el total de la orden
+            $this->validarSumaCuotas($data['plan_cuotas'] ?? null, $amtNeto);
+
             // Orden
             $order = Order::create([
                 'company_id'          => $data['company_id'],
@@ -621,7 +1021,9 @@ class OrderController extends Controller
                 'type_id'             => $typeId,
                 'format_id'           => $format->abrev,
                 'payment_schedule_id' => $data['payment_schedule_id'],
-                'user_responsible'    => TypeUser::where('type_id', $typeId)->inRandomOrder()->first()?->user_id ?? 0,
+                // Responsable = el AA de la gestión elegida (type_user). El GA decide a quién
+                // asignar vía el combo; el AA usa su propia gestión.
+                'user_responsible'    => TypeUser::where('type_id', $typeId)->value('user_id') ?? 0,
                 'created_by'          => $user->id,
                 'updated_by'          => $user->id,
             ]);
@@ -658,6 +1060,7 @@ class OrderController extends Controller
                 'observation'         => $data['observation'] ?? null,
                 'created_by'          => $user->id,
                 'updated_by'          => $user->id,
+                ...$this->destAccountSnapshot($data['supplier_account_id'] ?? null),   // snapshot cuenta destino
             ]);
 
             // Ítems (productos)
@@ -687,12 +1090,14 @@ class OrderController extends Controller
                 if ($file = $request->file("comprobantes.$i.path")) {
                     $path = $file->store('orders/vouchers', 'public');
                 }
+                $esRecibo = $rules['recibo'] && (string) ($cb['type_file'] ?? '') === (string) $rules['recibo'];
                 OrderFile::create([
-                    'id'              => $this->fileId($order->id, "cb-$i"),
                     'type_file'       => $cb['type_file'] ?? null,
                     'document_number' => $cb['document_number'] ?? null,
                     'amount'          => $cb['amount'] ?? null,
                     'emission_date'   => $cb['emission_date'] ?? null,
+                    'has_retention'   => $esRecibo ? !empty($cb['has_retention']) : null,
+                    'comentario'      => $cb['comentario'] ?? null,
                     'order_id'        => $order->id,
                     'path'            => $path,
                     'principal'       => $i == 0 ? 1 : 0,
@@ -706,7 +1111,6 @@ class OrderController extends Controller
                     continue;
                 }
                 OrderFile::create([
-                    'id'         => $this->fileId($order->id, "dn-$i"),
                     'type_file'  => $dn['type'] ?? null,
                     'order_id'   => $order->id,
                     'path'       => $file->store('orders/docs', 'public'),
@@ -742,13 +1146,6 @@ class OrderController extends Controller
         $sequence->increment('last_number');
         $sequence->refresh();
         $order->update(['code' => $typeOrder . '-' . $year . str_pad($sequence->last_number, 6, '0', STR_PAD_LEFT)]);
-    }
-
-    /** ID manual para orders_file (no autoincremental, columna INTEGER). */
-    private function fileId(int $orderId, string $tag): int
-    {
-        // crc32 puede exceder el rango INT de PostgreSQL; lo acotamos a 1..2147483646
-        return (crc32($orderId . '-' . $tag . '-' . microtime(true) . '-' . random_int(1, 99999)) % 2147483646) + 1;
     }
 
     /** Crea las cuotas: por plan si es fraccionado, o una sola al contado. */
@@ -816,6 +1213,11 @@ class OrderController extends Controller
             return response()->json($this->setRpta(0, 'Proveedor no encontrado', null));
         }
 
+        // Solo proveedores activos pueden usarse en órdenes. Si está inactivo, se guía a activarlo.
+        if (!$supplier->active) {
+            return response()->json($this->setRpta(0, 'El proveedor existe pero está INACTIVO. Actívalo desde Mantenimiento de Proveedores para poder usarlo.', ['exists' => true]));
+        }
+
         return response()->json($this->setRpta(1, 'OK', [
             'supplier' => [
                 'id'       => $supplier->id,
@@ -824,6 +1226,7 @@ class OrderController extends Controller
                 'address'  => $supplier->address,
                 'district' => $supplier->district,
                 'contact'  => $supplier->contact,
+                'phone'    => $supplier->phone,
                 'email'    => $supplier->email,
             ],
             'accounts' => $supplier->accounts->map(fn ($a) => [
@@ -841,7 +1244,7 @@ class OrderController extends Controller
     public function storeSupplier(Request $request)
     {
         $data = $request->validate([
-            'ruc'                       => ['required', 'string', 'max:20'],
+            'ruc'                       => ['required', 'string', 'digits:11'],
             'name'                      => ['required', 'string', 'max:250'],
             'address'                   => ['nullable', 'string', 'max:250'],
             'provincia'                 => ['nullable', 'string', 'max:100'],
@@ -854,11 +1257,16 @@ class OrderController extends Controller
             'accounts.*.currency'       => ['required'],
             'accounts.*.account_number' => ['required', 'string'],
             'accounts.*.cci'            => ['nullable', 'string'],
+        ], [
+            'ruc.digits' => 'El RUC debe tener exactamente 11 dígitos.',
         ]);
 
         $uid = auth()->id();
 
         $supplier = DB::transaction(function () use ($data, $uid) {
+            // Evita choques de secuencias tras migrar de MySQL (suppliers / supplier_accounts)
+            $this->syncSequences(['suppliers', 'supplier_accounts']);
+
             $supplier = Supplier::create([
                 'ruc'        => $data['ruc'],
                 'name'       => $data['name'],
@@ -897,6 +1305,7 @@ class OrderController extends Controller
                 'address'  => $supplier->address,
                 'district' => $supplier->district,
                 'contact'  => $supplier->contact,
+                'phone'    => $supplier->phone,
                 'email'    => $supplier->email,
             ],
             'accounts' => $supplier->accounts->map(fn ($a) => [
@@ -965,10 +1374,80 @@ class OrderController extends Controller
         // Tipos de observación (modal observar) y de comprobante (modal cargar documentos)
         $obsTypes     = Master::where('main', 20)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
         $voucherTypes = Master::where('main', 15)->whereNotNull('description')->orderBy('description')->pluck('description', 'value');
+        $attachTypes  = Master::where('main', 18)->whereNotNull('description')->orderBy('description')->pluck('description', 'value');
+        $docRules     = $this->docRules();
 
         return view('Orders.view', compact(
-            'formats', 'areas', 'schedules', 'status', 'statusNames', 'orders', 'canEdit', 'actions', 'obsTypes', 'voucherTypes'
+            'formats', 'areas', 'schedules', 'status', 'statusNames', 'orders', 'canEdit', 'actions',
+            'obsTypes', 'voucherTypes', 'attachTypes', 'docRules'
         ));
+    }
+
+    /**
+     * Devuelve las filas de Mis Órdenes ya renderizadas (mismo partial que la carga inicial),
+     * con datos frescos de la BD. Usado por el botón "Recargar" para refrescar la tabla sin
+     * recargar la página (emula AJAX reutilizando el Blade existente).
+     */
+    public function ordersRows()
+    {
+        $user        = auth()->user();
+        $orders      = $this->scopedOrders($user)->latest()->get();
+        $statusNames = Status::pluck('description', 'id');
+        $canEdit     = fn (Order $o) => $this->canEditRecord($o);
+        $actions     = fn (Order $o) => $this->orderActions($o);
+        $isGA        = $user->user_type === 'GA';
+
+        $html = view('Orders.partials.order-rows', compact('orders', 'statusNames', 'canEdit', 'actions', 'isGA'))->render();
+
+        return response()->json($this->setRpta(1, 'OK', ['html' => $html, 'count' => $orders->count()]));
+    }
+
+    /**
+     * Aprobación masiva (solo GA): aprueba varias órdenes en POR_REVISAR [2] de una vez.
+     * Si alguna seleccionada no está en estado 2, no aprueba ninguna y avisa.
+     */
+    public function bulkApprove(Request $request)
+    {
+        $user = auth()->user();
+        if ($user->user_type !== 'GA') {
+            abort(403);
+        }
+
+        $data   = $request->validate([
+            'ids'   => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer'],
+        ]);
+        $orders = Order::with('paymentSchedule')->whereIn('id', $data['ids'])->get();
+
+        // Validación: todas deben estar en POR_REVISAR (2)
+        $noAprobables = $orders->filter(fn ($o) => (int) $o->status !== 2);
+        if ($noAprobables->isNotEmpty()) {
+            return response()->json($this->setRpta(0,
+                'No se puede: ' . $noAprobables->count() . ' orden(es) seleccionada(s) no están en estado POR REVISAR. La aprobación masiva solo aplica a ese estado.'
+            ));
+        }
+
+        $aprobadas = 0;
+        DB::transaction(function () use ($orders, $user, &$aprobadas) {
+            $this->syncSequences(['order_history']);   // evita choque de secuencias al insertar historial
+            foreach ($orders as $o) {
+                $t = $this->advanceTransition($o);
+                if (!$t || $t['kind'] !== 'confirm') {
+                    continue;
+                }
+                $current = (int) $o->status;
+                OrderHistory::create([
+                    'from_user' => $user->user_type, 'to_user' => $t['to'],
+                    'from_status' => $current, 'to_status' => $t['next'],
+                    'coment' => '', 'order_id' => $o->id,
+                    'created_by' => $user->id, 'updated_by' => $user->id,
+                ]);
+                $o->update(['status' => $t['next'], 'updated_by' => $user->id]);
+                $aprobadas++;
+            }
+        });
+
+        return response()->json($this->setRpta(1, "Se aprobaron {$aprobadas} orden(es).", ['redirect' => route('orders.view')]));
     }
 
     /**
@@ -1086,6 +1565,19 @@ class OrderController extends Controller
             abort(403);
         }
         $current = (int) $order->status;
+
+        // Al sustentar (AA: 102 → 8): debe haber al menos un comprobante de pago y cumplirse
+        // los anexos del Recibo x Honorario.
+        if ($current === 102 && (int) $t['next'] === 8) {
+            $order->loadMissing('files');
+            $tieneComprobante = $order->files->contains(fn ($f) => $f->document_number || $f->amount);
+            if (!$tieneComprobante) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'comprobante' => 'No se puede sustentar: la orden no tiene ningún comprobante de pago adjunto.',
+                ]);
+            }
+            $this->validarReciboHonorarioOrden($order);
+        }
 
         DB::transaction(function () use ($order, $user, $current, $t) {
             OrderHistory::create([
@@ -1245,27 +1737,79 @@ class OrderController extends Controller
     }
 
     /**
+     * ¿La programación (tipo: urgente/general) está bloqueada para edición?
+     * Es editable solo en la zona pre-aprobación del GA (estados 1 CREADO / 2 POR REVISAR,
+     * y observadas que vienen de esa zona). Una vez aprobada/aceptada por el GA, la rama del
+     * flujo queda fijada y cambiarla vararía la orden, así que se bloquea.
+     */
+    private function isScheduleLocked(Order $record): bool
+    {
+        $status = (int) $record->status;
+        if (in_array($status, [1, 2], true)) return false;   // pre-aprobación: editable
+        if ($status !== 5) return true;                       // ya en el flujo: bloqueada
+        // Observada: editable solo si la observación vino de la zona pre-aprobación (GA en 2).
+        $obs = OrderHistory::where('order_id', $record->id)
+            ->where('to_status', 5)->latest('id')->first();
+        return !$obs || !in_array((int) $obs->from_status, [1, 2], true);
+    }
+
+    /**
+     * Scope de Órdenes Históricas según el rol:
+     *  - AA: solo las suyas (user_responsible).
+     *  - JA: solo las que creó (created_by).
+     *  - resto: todas.
+     */
+    private function scopedHistory($user)
+    {
+        return Order::with(['company', 'detail', 'responsible', 'paymentSchedule'])
+            ->when($user->user_type === 'AA', fn ($q) => $q->where('user_responsible', $user->id))
+            ->when($user->user_type === 'JA', fn ($q) => $q->where('created_by', $user->id));
+    }
+
+    /**
      * Órdenes Históricas — todas las órdenes (consulta).
-     * AA solo ve las suyas (user_responsible); el resto de roles ve todo.
      */
     public function history()
     {
         $user = auth()->user();
 
-        $query = Order::with(['company', 'detail', 'responsible', 'paymentSchedule']);
-        if ($user->user_type === 'AA') {
-            $query->where('user_responsible', $user->id);
-        }
-        $orders = $query->latest()->get();
+        $orders = $this->scopedHistory($user)->latest()->get();
 
         // Datos para filtros
-        $formats     = Format::orderBy('description')->get();
-        $areas       = Area::orderBy('description')->get();
         $schedules   = PaymentSchedule::orderBy('name')->get();
-        $status      = Status::orderBy('id')->pluck('description', 'id');   // todos los estados
+        // Tipo de orden (Compra / Servicio): el filtro coincide con orders.format_id (abrev OC/OS).
+        $tipos       = Format::orderBy('description')->pluck('description', 'abrev');
+        // Estados del flujo de la orden para el filtro. Los estados de abono
+        // (PENDIENTE_POR_DEPOSITO/DEPOSITADO/CONSTANCIA_ADJUNTADA, rango 200+)
+        // pertenecen al ciclo de Cuentas por Pagar y no aplican aquí.
+        $status      = Status::where('id', '<', 200)->orderBy('id')->pluck('description', 'id');
+        $statusNames = Status::pluck('description', 'id');   // etiquetas completas para la tabla
+        // Responsables: siempre rol AA. El GA, al crear, asigna la orden a un AA específico
+        // (vía la gestión), así que el GA nunca es responsable. Query ligera por rol,
+        // independiente del número de órdenes. Un AA solo se ve a sí mismo.
+        $responsibles = User::where('user_type', 'AA')
+            ->when($user->user_type === 'AA', fn ($q) => $q->where('id', $user->id))
+            ->orderBy('name')->pluck('name', 'id');
+        // Empresas: directo de la tabla companies (independiente del número de órdenes).
+        $companies  = Company::orderBy('name')->pluck('name', 'id');
+        // Monedas: de masters (main=1). value = código que guarda order_details.currency (PEN/USD).
+        $currencies = Master::where('main', 1)->whereNotNull('value')
+            ->orderBy('description')->pluck('description', 'value');
+
+        return view('Orders.history', compact('orders', 'schedules', 'tipos', 'status', 'statusNames', 'responsibles', 'companies', 'currencies'));
+    }
+
+    /** Filas frescas de Órdenes Históricas (botón Recargar): re-consulta la BD y devuelve solo el partial. */
+    public function historyRows()
+    {
+        $user = auth()->user();
+
+        $orders      = $this->scopedHistory($user)->latest()->get();
         $statusNames = Status::pluck('description', 'id');
 
-        return view('Orders.history', compact('orders', 'formats', 'areas', 'schedules', 'status', 'statusNames'));
+        $html = view('Orders.partials.history-rows', compact('orders', 'statusNames'))->render();
+
+        return response()->json($this->setRpta(1, 'OK', ['html' => $html, 'count' => $orders->count()]));
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -1276,13 +1820,44 @@ class OrderController extends Controller
     public function payable()
     {
         $user = auth()->user();
-        $role = $user->user_type;
-
-        // Roles del ciclo de pago: GF/AF operan; AA observa sus abonos (urgente); UC2 (general).
-        if (!in_array($role, ['AA', 'UC2', 'GF', 'AF'], true)) {
+        if (!in_array($user->user_type, ['AA', 'UC2', 'GF', 'AF'], true)) {
             abort(403);
         }
 
+        $rows = $this->collectPayableRows($user);
+
+        // Cuentas de origen disponibles (datos bancarios de las empresas) para el depósito
+        $companies = Company::orderBy('name')
+            ->get(['id', 'name', 'source_bank', 'source_account_number', 'source_cci']);
+        // Opciones de filtros (de sus tablas fuente).
+        $schedules  = PaymentSchedule::orderBy('name')->get();
+        $tipos      = Format::orderBy('description')->pluck('description', 'abrev');   // abrev OC/OS = orders.format_id
+        $currencies = Master::where('main', 1)->whereNotNull('value')                 // value = order_details.currency (PEN/USD)
+            ->orderBy('description')->pluck('description', 'value');
+
+        return view('Orders.payable', compact('rows', 'companies', 'schedules', 'tipos', 'currencies'));
+    }
+
+    /** Filas frescas de Cuentas por Pagar (botón Recargar): re-consulta la BD y devuelve el partial. */
+    public function payableRows()
+    {
+        $user = auth()->user();
+        if (!in_array($user->user_type, ['AA', 'UC2', 'GF', 'AF'], true)) {
+            abort(403);
+        }
+
+        $rows = $this->collectPayableRows($user);
+        $html = view('Orders.partials.payable-rows', compact('rows'))->render();
+
+        return response()->json($this->setRpta(1, 'OK', ['html' => $html, 'count' => count($rows)]));
+    }
+
+    /** Abonos en proceso de pago según el rol (filas para Cuentas por Pagar). */
+    private function collectPayableRows($user): array
+    {
+        $role = $user->user_type;
+
+        // Roles del ciclo de pago: GF/AF operan; AA observa sus abonos (urgente); UC2 (general).
         $query = Order::with(['quotas', 'company', 'paymentSchedule', 'detail'])
             ->whereIn('status', [102, 55]);
 
@@ -1293,22 +1868,14 @@ class OrderController extends Controller
         }
         // GF / AF ven todos los abonos en proceso.
 
-        $orders = $query->latest()->get();
-
         $rows = [];
-        foreach ($orders as $o) {
+        foreach ($query->latest()->get() as $o) {
             foreach ($o->quotas->sortBy('quota_number') as $ab) {
                 $rows[] = ['order' => $o, 'abono' => $ab, 'acts' => $this->abonoActions($ab, $o)];
             }
         }
 
-        $abStatus = [200 => 'Pendiente por depósito', 201 => 'Depositado', 202 => 'Constancia adjuntada'];
-
-        // Cuentas de origen disponibles (datos bancarios de las empresas) para el depósito
-        $companies = Company::orderBy('name')
-            ->get(['id', 'name', 'source_bank', 'source_account_number', 'source_cci']);
-
-        return view('Orders.payable', compact('rows', 'abStatus', 'companies'));
+        return $rows;
     }
 
     /**
@@ -1326,13 +1893,39 @@ class OrderController extends Controller
             abort(403);
         }
 
-        $query = OrderQuota::with(['order.company', 'order.paymentSchedule', 'order.detail'])
-            ->where('status', 202);
-
-        $abonos    = $query->get()->sortByDesc(fn ($q) => $q->deposit_date ?? $q->updated_at)->values();
+        $abonos    = $this->collectPaymentsRows();
         $companies = Company::orderBy('name')->pluck('name', 'id');
+        // Opciones de filtros (de sus tablas fuente).
+        $schedules  = PaymentSchedule::orderBy('name')->get();
+        $tipos      = Format::orderBy('description')->pluck('description', 'abrev');   // abrev OC/OS = orders.format_id
+        $currencies = Master::where('main', 1)->whereNotNull('value')                 // value = order_details.currency
+            ->orderBy('description')->pluck('description', 'value');
 
-        return view('Orders.payments', compact('abonos', 'companies'));
+        return view('Orders.payments', compact('abonos', 'companies', 'schedules', 'tipos', 'currencies'));
+    }
+
+    /** Filas frescas del Histórico de Pagos (botón Recargar): re-consulta y devuelve el partial. */
+    public function paymentsRows()
+    {
+        $user = auth()->user();
+        if (!in_array($user->user_type, ['GF', 'AF'], true)) {
+            abort(403);
+        }
+
+        $abonos = $this->collectPaymentsRows();
+        $html   = view('Orders.partials.payments-rows', compact('abonos'))->render();
+
+        return response()->json($this->setRpta(1, 'OK', ['html' => $html, 'count' => $abonos->count()]));
+    }
+
+    /** Abonos ya pagados (constancia adjuntada, 202), ordenados por fecha de depósito desc. */
+    private function collectPaymentsRows()
+    {
+        return OrderQuota::with(['order.company', 'order.paymentSchedule', 'order.detail'])
+            ->where('status', 202)
+            ->get()
+            ->sortByDesc(fn ($q) => $q->deposit_date ?? $q->updated_at)
+            ->values();
     }
 
     /** Acciones disponibles sobre un abono según rol + estado + programación. */
@@ -1344,8 +1937,8 @@ class OrderController extends Controller
 
         return [
             'deposit'    => $role === 'GF' && $st === 200,
-            'constancia' => $st === 201 && ($role === 'AF' || ($urg && $role === 'GF')),
-            'verify'     => $urg && $role === 'AA' && $st === 202 && !$q->monto_ok,
+            'constancia' => $st === 201 && ($role === 'AF' || $role === 'GF'),   // GF sube constancia en urgente y general
+            'verify'     => false,   // "Conforme" deshabilitado: no condiciona el avance (era solo informativo)
             'observe'    => $st === 202 && (($urg && $role === 'AA') || (!$urg && $role === 'UC2')),
         ];
     }
@@ -1386,7 +1979,7 @@ class OrderController extends Controller
         $o    = $q->order;
         $urg  = $this->isUrgente($o);
 
-        $puede = (int) $q->status === 201 && ($user->user_type === 'AF' || ($urg && $user->user_type === 'GF'));
+        $puede = (int) $q->status === 201 && ($user->user_type === 'AF' || $user->user_type === 'GF');   // GF sube constancia en urgente y general
         if (!$puede) {
             abort(403);
         }
@@ -1403,8 +1996,22 @@ class OrderController extends Controller
                 'constancia'       => $path,
                 'constancia_date'  => now(),
                 'operation_number' => $data['operation_number'],
+                'observacion'      => null,   // subsanado: la observación ya quedó en el histórico (orders_events)
+                'rebote'           => false,
                 'updated_by'       => $user->id,
             ]);
+
+            // Histórico append-only: cada constancia subida queda registrada (no se sobrescribe)
+            OrderEvent::create([
+                'order_id'       => $o->id,
+                'order_quota_id' => $q->id,
+                'event_type'     => 'constancia_abono',
+                'description'    => $data['operation_number'],
+                'file'           => $path,
+                'created_by'     => $user->id,
+                'updated_by'     => $user->id,
+            ]);
+
             $this->checkAbonosCompletos($o->refresh());
         });
 
@@ -1444,6 +2051,17 @@ class OrderController extends Controller
                 'status' => 201, 'monto_ok' => false, 'rebote' => true,
                 'observacion' => $data['observacion'], 'updated_by' => $user->id,
             ]);
+
+            // Histórico: queda registrada la observación (no se pierde al subsanar)
+            OrderEvent::create([
+                'order_id'       => $o->id,
+                'order_quota_id' => $q->id,
+                'event_type'     => 'observacion_abono',
+                'description'    => $data['observacion'],
+                'created_by'     => $user->id,
+                'updated_by'     => $user->id,
+            ]);
+
             // General: si la orden ya estaba en [55], regresa a [102] (falta completar abonos)
             if (!$urg && (int) $o->status === 55) {
                 OrderHistory::create([
@@ -1468,7 +2086,8 @@ class OrderController extends Controller
         $total = $o->quotas()->count();
         if ($total > 0 && $o->quotas()->where('status', 202)->count() === $total) {
             OrderHistory::create([
-                'from_user' => '', 'to_user' => 'UC2',
+                // Rol del actor que completó el último abono (AF general / GF), para que el timeline lo muestre.
+                'from_user' => auth()->user()?->user_type ?? '', 'to_user' => 'UC2',
                 'from_status' => 102, 'to_status' => 55,
                 'coment' => 'Abonos completados', 'order_id' => $o->id,
                 'created_by' => auth()->id(), 'updated_by' => auth()->id(),
@@ -1511,6 +2130,48 @@ class OrderController extends Controller
         return view('Orders.vistacontable', compact('o', 'vm', 'acts', 'observe', 'obsTypes', 'statusLabel', 'codeMode', 'codeLabel', 'isCode', 'isClose', 'closeLabel'));
     }
 
+    /**
+     * Cuenta bancaria DESTINO que usa una orden, como array [bank, currency, account_number, cci].
+     * Prioriza el snapshot guardado en la orden (dest_*); si está vacío (órdenes previas a la
+     * migración) cae a la cuenta viva del proveedor por supplier_account_id.
+     */
+    private function resolveDestAccount($detail): ?array
+    {
+        if (!$detail) return null;
+
+        if ($detail->dest_account_number) {
+            return [
+                'bank'           => $detail->dest_bank,
+                'currency'       => $detail->dest_currency,
+                'account_number' => $detail->dest_account_number,
+                'cci'            => $detail->dest_cci,
+            ];
+        }
+
+        // Fallback en vivo (órdenes anteriores al snapshot)
+        $a = $detail->supplier?->accounts->firstWhere('id', $detail->supplier_account_id)
+            ?? $detail->supplier?->accounts->first();
+
+        return $a ? [
+            'bank'           => $a->bank,
+            'currency'       => $a->currency,
+            'account_number' => $a->account_number,
+            'cci'            => $a->cci,
+        ] : null;
+    }
+
+    /** Snapshot de la cuenta destino para guardar en order_details (columnas dest_*). */
+    private function destAccountSnapshot($accountId): array
+    {
+        $a = $accountId ? SupplierAccount::find($accountId) : null;
+        return [
+            'dest_bank'           => $a?->bank,
+            'dest_account_number' => $a?->account_number,
+            'dest_cci'            => $a?->cci,
+            'dest_currency'       => $a?->currency,
+        ];
+    }
+
     /** Arma el modelo de datos completo de una orden (resumen reutilizable: modal y vista contable). */
     private function orderSummaryData($order): array
     {
@@ -1533,9 +2194,19 @@ class OrderController extends Controller
         // Documentos: comprobantes (con metadatos) y anexos
         $voucherLabels = Master::where('main', 15)->pluck('description', 'value');
         $attachLabels  = Master::where('main', 18)->pluck('description', 'value');
+        // Nombres de quien subió cada archivo (created_by), precargados para evitar N+1.
+        $uploaderNames = User::whereIn('id', $o->files->pluck('created_by')->filter()->unique())->pluck('name', 'id');
+        // Quién subió la constancia de cada cuota: último evento 'constancia_abono'. Mapa [quota_id => nombre].
+        $constanciaEvents = OrderEvent::where('order_id', $o->id)
+            ->where('event_type', 'constancia_abono')
+            ->orderByDesc('id')->get(['order_quota_id', 'created_by']);
+        $evUploaderNames = User::whereIn('id', $constanciaEvents->pluck('created_by')->filter()->unique())->pluck('name', 'id');
+        $constanciaUploaders = $constanciaEvents->groupBy('order_quota_id')
+            ->map(fn ($evs) => $evUploaderNames[$evs->first()->created_by] ?? '—');
 
         return [
             'es_fraccionado' => $esFraccionado,
+            'observacion'    => $d?->observation,   // observaciones del detalle de la orden
             'general' => [
                 'empresa'       => $o->company?->name ?? '—',
                 'tipo'          => Format::where('abrev', $o->format_id)->value('description') ?? $o->format_id,
@@ -1566,12 +2237,13 @@ class OrderController extends Controller
                 'direccion'    => $sup->address ?: '—',
                 'distrito'     => $sup->district ?: '—',
                 'contacto'     => $sup->contact ?: '—',
+                'celular'      => $sup->phone ?: '—',
                 'email'        => $sup->email ?: '—',
-                'cuenta'       => $account ? [
-                    'banco'  => $account->bank ?: '—',
-                    'numero' => $account->account_number ?: '—',
-                    'cci'    => $account->cci ?: '—',
-                    'moneda' => $account->currency ?: '—',
+                'cuenta'       => ($destCuenta = $this->resolveDestAccount($d)) ? [
+                    'banco'  => $destCuenta['bank'] ?: '—',
+                    'numero' => $destCuenta['account_number'] ?: '—',
+                    'cci'    => $destCuenta['cci'] ?: '—',
+                    'moneda' => $destCuenta['currency'] ?: '—',
                 ] : null,
             ] : null,
             'items' => $o->products->map(fn ($p) => [
@@ -1587,13 +2259,16 @@ class OrderController extends Controller
                 'monto'        => ($f->amount !== null && $f->amount !== '') ? $fmt($f->amount) : '—',
                 'fecha'        => $f->emission_date ? \Carbon\Carbon::parse($f->emission_date)->format('d/m/Y') : '—',
                 'cod_registro' => $f->registration_code ?: null,
+                'comentario'   => $f->comentario ?: null,
                 'subida'       => $f->created_at ? \Carbon\Carbon::parse($f->created_at)->format('d/m/Y H:i') : '—',
+                'uploader'     => $uploaderNames[$f->created_by] ?? '—',
                 'path'         => $f->path ? asset('storage/' . $f->path) : null,
             ])->values(),
             'anexos' => $o->files->reject(fn ($f) => $f->document_number || $f->amount)->map(fn ($f) => [
                 'tipo'       => $attachLabels[$f->type_file] ?? ($f->type_file ?? '—'),
                 'comentario' => $f->comentario ?: '—',
                 'subida'     => $f->created_at ? \Carbon\Carbon::parse($f->created_at)->format('d/m/Y H:i') : '—',
+                'uploader'   => $uploaderNames[$f->created_by] ?? '—',
                 'path'       => $f->path ? asset('storage/' . $f->path) : null,
             ])->values(),
             'cuotas' => $o->quotas->sortBy('quota_number')->map(fn ($q) => [
@@ -1605,6 +2280,7 @@ class OrderController extends Controller
                 'constancia' => $q->constancia ? asset('storage/' . $q->constancia) : null,
                 'const_fecha' => $q->constancia_date ? \Carbon\Carbon::parse($q->constancia_date)->format('d/m/Y H:i') : null,
                 'operacion'  => $q->operation_number,
+                'subido_por' => $constanciaUploaders[$q->id] ?? '—',
             ])->values(),
         ];
     }
@@ -1627,8 +2303,28 @@ class OrderController extends Controller
                 'document_number'   => $f->document_number,
                 'amount'            => number_format((float) $f->amount, 2),
                 'emission_date'     => $f->emission_date,
+                'comentario'        => $f->comentario,
                 'path'              => $f->path ? asset('storage/' . $f->path) : null,
                 'registration_code' => $f->registration_code,
+                'has_retention'     => $f->has_retention,
+            ])->values();
+
+        return response()->json($this->setRpta(1, 'OK', $list));
+    }
+
+    /** Lista los documentos anexos de una orden (para la carga del AA en [102]). */
+    public function anexos($order)
+    {
+        $o      = Order::with('files')->findOrFail($order);
+        $labels = Master::where('main', 18)->pluck('description', 'value');
+
+        $list = $o->files
+            ->reject(fn ($f) => $f->document_number || $f->amount)
+            ->map(fn ($f) => [
+                'id'         => $f->id,
+                'type_label' => $labels[$f->type_file] ?? $f->type_file,
+                'comentario' => $f->comentario,
+                'path'       => $f->path ? asset('storage/' . $f->path) : null,
             ])->values();
 
         return response()->json($this->setRpta(1, 'OK', $list));
@@ -1648,15 +2344,21 @@ class OrderController extends Controller
             'document_number' => ['required', 'string', 'max:100'],
             'amount'          => ['required', 'numeric'],
             'emission_date'   => ['required', 'date'],
+            'has_retention'   => ['nullable'],
+            'comentario'      => ['nullable', 'string', 'max:500'],
             'file'            => ['required', 'file', 'max:10240'],
         ]);
 
+        $rules    = $this->docRules();
+        $esRecibo = $rules['recibo'] && (string) $data['type_file'] === (string) $rules['recibo'];
+
         OrderFile::create([
-            'id'              => $this->fileId($o->id, 'cb-aa'),
             'type_file'       => $data['type_file'],
             'document_number' => $data['document_number'],
             'amount'          => $data['amount'],
             'emission_date'   => $data['emission_date'],
+            'has_retention'   => $esRecibo ? $request->boolean('has_retention') : null,
+            'comentario'      => $data['comentario'] ?? null,
             'order_id'        => $o->id,
             'path'            => $request->file('file')->store('orders/vouchers', 'public'),
             'principal'       => 1,
@@ -1664,6 +2366,58 @@ class OrderController extends Controller
         ]);
 
         return response()->json($this->setRpta(1, 'Comprobante cargado', null));
+    }
+
+    /** AA carga un documento anexo durante [102]. */
+    public function uploadAnexo(Request $request, $order)
+    {
+        $o    = Order::with('paymentSchedule')->findOrFail($order);
+        $user = auth()->user();
+        if (!($user->user_type === 'AA' && (int) $o->status === 102 && $this->isUrgente($o))) {
+            abort(403);
+        }
+
+        $data = $request->validate([
+            'type_file'  => ['required'],
+            'comentario' => ['nullable', 'string', 'max:500'],
+            'file'       => ['required', 'file', 'max:10240'],
+        ]);
+
+        OrderFile::create([
+            'type_file'  => $data['type_file'],
+            'comentario' => $data['comentario'] ?? null,
+            'order_id'   => $o->id,
+            'path'       => $request->file('file')->store('orders/docs', 'public'),
+            'principal'  => 0,
+            'created_by' => $user->id, 'updated_by' => $user->id,
+        ]);
+
+        return response()->json($this->setRpta(1, 'Documento anexo cargado', null));
+    }
+
+    /** AA elimina un documento anexo durante [102]. */
+    public function deleteAnexo($order, $file)
+    {
+        $o    = Order::with('paymentSchedule')->findOrFail($order);
+        $user = auth()->user();
+        if (!($user->user_type === 'AA' && (int) $o->status === 102 && $this->isUrgente($o))) {
+            abort(403);
+        }
+        OrderFile::where('order_id', $o->id)->where('id', $file)
+            ->where(fn ($q) => $q->whereNull('document_number')->whereNull('amount'))
+            ->delete();
+
+        return response()->json($this->setRpta(1, 'Documento anexo eliminado', null));
+    }
+
+    /** Regla Recibo x Honorario sobre los archivos ya guardados de una orden. */
+    private function validarReciboHonorarioOrden(Order $o): void
+    {
+        $files  = $o->files()->get();
+        $comps  = $files->filter(fn ($f) => $f->document_number || $f->amount)
+            ->map(fn ($f) => ['type_file' => $f->type_file, 'has_retention' => $f->has_retention])->values()->all();
+        $anexos = $files->reject(fn ($f) => $f->document_number || $f->amount)->pluck('type_file')->all();
+        $this->validarReciboHonorario($comps, $anexos);
     }
 
     /** AA elimina un comprobante durante [102]. (Bloqueado si ya tiene código de registro o de banco.) */
@@ -1714,13 +2468,22 @@ class OrderController extends Controller
      */
     public function advanceRegistro($order)
     {
-        $o    = Order::with('paymentSchedule')->findOrFail($order);
+        $o    = Order::with(['paymentSchedule', 'files'])->findOrFail($order);
         $user = auth()->user();
 
         $t = $this->advanceTransition($o);
         if (!$t || ($t['mode'] ?? null) !== 'perdoc') {
             abort(403);
         }
+
+        // Todos los documentos de pago deben tener un Código de Registro GUARDADO (en BD).
+        $comprobantes = $o->files->filter(fn ($f) => $f->document_number || $f->amount);
+        if ($comprobantes->isEmpty() || $comprobantes->contains(fn ($f) => blank($f->registration_code))) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'codigo' => 'Asigna y guarda el Código de Registro de todos los documentos de pago antes de continuar.',
+            ]);
+        }
+
         $current = (int) $o->status;
 
         DB::transaction(function () use ($o, $user, $current, $t) {
@@ -1739,7 +2502,10 @@ class OrderController extends Controller
     /** Historial de movimientos de una orden (línea de tiempo). */
     public function timeline($order)
     {
-        $history     = OrderHistory::where('order_id', $order)->orderByDesc('id')->get();
+        // Orden cronológico real (por fecha/hora; id como desempate). El id no es fiable
+        // como orden temporal por el desfase de secuencias heredado de la migración.
+        $history     = OrderHistory::where('order_id', $order)
+            ->orderByDesc('created_at')->orderByDesc('id')->get();
         $statusNames = Status::pluck('description', 'id');
         $roleNames   = UserType::pluck('description', 'prefijo');
         $userNames   = User::pluck('name', 'id');
@@ -1783,10 +2549,17 @@ class OrderController extends Controller
                     $q->whereIn('status', $normalStatuses);
                 }
                 if (in_array(5, $allowedStatuses)) {
+                    // OBSERVADO (5): visible solo para el rol al que apunta la ÚLTIMA observación.
+                    // Una orden pudo ser observada hacia varios roles a lo largo del flujo; comparar
+                    // contra TODO el historial (whereHas) la mostraba a roles de observaciones ya
+                    // resueltas. Comparamos el to_user del registro de historial más reciente.
                     $q->orWhere(function ($q2) use ($user) {
                         $q2->where('status', 5)
-                           ->whereHas('history', fn ($q3) =>
-                               $q3->where('to_status', 5)->where('to_user', $user->user_type));
+                           ->whereRaw(
+                               '(select oh.to_user from order_history oh where oh.order_id = orders.id '
+                               . 'order by oh.created_at desc, oh.id desc limit 1) = ?',
+                               [$user->user_type]
+                           );
                     });
                 }
             });

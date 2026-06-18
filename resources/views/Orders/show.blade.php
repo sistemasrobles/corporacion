@@ -109,25 +109,25 @@
                     <div class="info"><span class="info-label">Distrito</span><span class="info-value">{{ $supplier->district ?? '—' }}</span></div>
                     <div class="info"><span class="info-label">Domicilio fiscal</span><span class="info-value">{{ $supplier->address ?? '—' }}</span></div>
                     <div class="info"><span class="info-label">Contacto</span><span class="info-value">{{ $supplier->contact ?? '—' }}</span></div>
+                    <div class="info"><span class="info-label">Celular</span><span class="info-value">{{ $supplier->phone ?? '—' }}</span></div>
                     <div class="info"><span class="info-label">Correo</span><span class="info-value">{{ $supplier->email ?? '—' }}</span></div>
                 </div>
 
-                <span class="info-label" style="margin-bottom:6px">Cuentas bancarias</span>
+                <span class="info-label" style="margin-bottom:6px">Cuenta de pago (destino)</span>
                 <div class="table-responsive">
                     <table class="table">
-                        <thead><tr><th>Banco</th><th>Moneda</th><th>N° cuenta</th><th>CCI</th><th>Seleccionada</th></tr></thead>
+                        <thead><tr><th>Banco</th><th>Moneda</th><th>N° cuenta</th><th>CCI</th></tr></thead>
                         <tbody>
-                            @forelse ($supplier->accounts as $a)
+                            @if ($destAccount)
                                 <tr>
-                                    <td class="cell-strong">{{ $a->bank }}</td>
-                                    <td><span class="status status-blue">{{ $a->currency }}</span></td>
-                                    <td>{{ $a->account_number }}</td>
-                                    <td>{{ $a->cci ?? '—' }}</td>
-                                    <td>@if ($selectedAccount == $a->id)<span class="status status-green">Sí</span>@else — @endif</td>
+                                    <td class="cell-strong">{{ $destAccount['bank'] ?: '—' }}</td>
+                                    <td><span class="status status-blue">{{ $destAccount['currency'] ?: '—' }}</span></td>
+                                    <td>{{ $destAccount['account_number'] ?: '—' }}</td>
+                                    <td>{{ $destAccount['cci'] ?: '—' }}</td>
                                 </tr>
-                            @empty
-                                <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:14px">Sin cuentas registradas.</td></tr>
-                            @endforelse
+                            @else
+                                <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:14px">Sin cuenta de pago registrada.</td></tr>
+                            @endif
                         </tbody>
                     </table>
                 </div>
@@ -201,7 +201,7 @@
                 <span class="info-label" style="margin:16px 0 6px">Plan de cuotas</span>
                 <div class="table-responsive">
                     <table class="table">
-                        <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>N° Operación</th><th>Constancia</th><th>F. Subida</th></tr></thead>
+                        <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>N° Operación</th><th>Constancia</th><th>F. Subida</th><th>Subido por</th></tr></thead>
                         <tbody>
                             @foreach ($cuotas as $q)
                                 <tr>
@@ -218,6 +218,7 @@
                                     <td class="cell-mono">{{ $q->operation_number ?: '—' }}</td>
                                     <td>@if ($q->constancia)<a href="/storage/{{ $q->constancia }}" target="_blank" style="color:var(--primary)">Ver</a>@else <span style="color:var(--text-muted)">—</span>@endif</td>
                                     <td>{{ $q->constancia_date ? \Carbon\Carbon::parse($q->constancia_date)->format('d/m/Y H:i') : '—' }}</td>
+                                    <td>{{ $constanciaUploaders[$q->id] ?? '—' }}</td>
                                 </tr>
                             @endforeach
                         </tbody>
@@ -234,7 +235,7 @@
             <strong style="font-size:13px;display:block;margin-bottom:8px">Comprobantes de pago</strong>
             <div class="table-responsive" style="margin-bottom:20px">
                 <table class="table">
-                    <thead><tr><th>Tipo</th><th>N° Documento</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>F. Subida</th><th>Archivo</th></tr></thead>
+                    <thead><tr><th>Tipo</th><th>N° Documento</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Comentario</th><th>F. Subida</th><th>Subido por</th><th>Archivo</th></tr></thead>
                     <tbody>
                         @forelse ($comprobantes as $c)
                             <tr>
@@ -243,11 +244,13 @@
                                 <td style="text-align:right" class="cell-strong">{{ $c['amount'] !== null ? $cur . ' ' . number_format($c['amount'], 2) : '—' }}</td>
                                 <td>{{ $c['date'] ?? '—' }}</td>
                                 <td class="cell-mono">{{ $c['cod_reg'] ?: '—' }}</td>
+                                <td>{{ $c['coment'] ?: '—' }}</td>
                                 <td>{{ $c['subida'] ?? '—' }}</td>
+                                <td>{{ $c['uploader'] ?? '—' }}</td>
                                 <td>@if ($c['path'])<a href="/storage/{{ $c['path'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else — @endif</td>
                             </tr>
                         @empty
-                            <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:14px">Sin comprobantes.</td></tr>
+                            <tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:14px">Sin comprobantes.</td></tr>
                         @endforelse
                     </tbody>
                 </table>
@@ -256,17 +259,18 @@
             <strong style="font-size:13px;display:block;margin-bottom:8px">Documentos anexos</strong>
             <div class="table-responsive">
                 <table class="table">
-                    <thead><tr><th>Tipo</th><th>Comentario</th><th>F. Subida</th><th>Archivo</th></tr></thead>
+                    <thead><tr><th>Tipo</th><th>Comentario</th><th>F. Subida</th><th>Subido por</th><th>Archivo</th></tr></thead>
                     <tbody>
                         @forelse ($documentos as $doc)
                             <tr>
                                 <td>{{ $doc['label'] }}</td>
                                 <td>{{ $doc['comentario'] ?? '—' }}</td>
                                 <td>{{ $doc['subida'] ?? '—' }}</td>
+                                <td>{{ $doc['uploader'] ?? '—' }}</td>
                                 <td>@if ($doc['path'])<a href="/storage/{{ $doc['path'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else — @endif</td>
                             </tr>
                         @empty
-                            <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:14px">Sin documentos.</td></tr>
+                            <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:14px">Sin documentos.</td></tr>
                         @endforelse
                     </tbody>
                 </table>

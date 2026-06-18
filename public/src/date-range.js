@@ -50,7 +50,7 @@
         if (!input) return;
         input.readOnly = true;
 
-        const state = { from: null, to: null, hover: null, pivot: new Date() };
+        const state = { from: null, to: null, hover: null, pivot: new Date(), custom: false };
 
         const popover = document.createElement('div');
         popover.className = 'dr-popover';
@@ -65,6 +65,7 @@
             { label: 'Este mes',      get: () => { const b = new Date(); const a = new Date(b.getFullYear(), b.getMonth(), 1); return [a, b]; } },
             { label: 'Mes anterior',  get: () => { const t = new Date(); const a = new Date(t.getFullYear(), t.getMonth() - 1, 1); const b = new Date(t.getFullYear(), t.getMonth(), 0); return [a, b]; } },
             { label: 'Este año',      get: () => { const b = new Date(); const a = new Date(b.getFullYear(), 0, 1); return [a, b]; } },
+            { label: 'Personalizado', custom: true },
         ];
 
         const render = () => {
@@ -75,7 +76,7 @@
             const hoverTs = state.hover ? isoDay(state.hover) : null;
             popover.innerHTML = `
                 <div class="dr-presets">
-                    ${presets.map((p) => `<button type="button" class="dr-preset" data-preset="${p.label}">${p.label}</button>`).join('')}
+                    ${presets.map((p) => `<button type="button" class="dr-preset${p.custom && state.custom ? ' active' : ''}" data-preset="${p.label}">${p.label}</button>`).join('')}
                 </div>
                 <div class="dr-cal">
                     <div class="dr-nav">
@@ -88,7 +89,13 @@
                         ${buildMonth(m2.getFullYear(), m2.getMonth(), fromTs, toTs, hoverTs)}
                     </div>
                     <div class="dr-footer">
-                        <div class="dr-summary">${state.from ? fmt(state.from) : '—'} → ${state.to ? fmt(state.to) : '—'}</div>
+                        <div class="dr-summary">
+                            ${!state.from
+                                ? '<span style="color:var(--text-muted)">Elige la fecha inicial</span>'
+                                : !state.to
+                                    ? `${fmt(state.from)} <span style="color:var(--primary)">→ ahora la fecha final</span>`
+                                    : `${fmt(state.from)} → ${fmt(state.to)}`}
+                        </div>
                         <div style="display:flex;gap:6px">
                             <button type="button" class="btn btn-ghost btn-sm" data-action="close">Cerrar</button>
                             <button type="button" class="btn btn-ghost btn-sm" data-action="clear">Limpiar</button>
@@ -96,6 +103,21 @@
                         </div>
                     </div>
                 </div>`;
+        };
+
+        // Preview del rango SIN redibujar el DOM: solo pinta/despinta clases en las
+        // celdas existentes. Redibujar en cada 'mouseover' (render completo) reemplazaba
+        // los botones y hacía que el segundo clic se perdiera; esto deja el DOM estable.
+        const paintRange = () => {
+            const fromTs  = state.from ? isoDay(state.from) : null;
+            const hoverTs = state.hover ? isoDay(state.hover) : null;
+            popover.querySelectorAll('.dr-cell').forEach((btn) => {
+                if (btn.classList.contains('empty')) return;
+                const ts = parseInt(btn.dataset.ts, 10);
+                const on = fromTs && !state.to && hoverTs && ts > fromTs && ts <= hoverTs;
+                btn.classList.toggle('in-range', !!on);
+                btn.classList.toggle('preview', !!on);
+            });
         };
 
         const position = () => {
@@ -118,22 +140,36 @@
             wrap.dispatchEvent(new CustomEvent('change', { detail: { from: null, to: null } }));
         };
 
-        popover.addEventListener('click', (e) => {
+        // Selección de día en 'mousedown' (no en 'click'): como el 'mouseover' redibuja
+        // el calendario para la vista previa, reemplaza los nodos del DOM y un 'click'
+        // (que exige mismo nodo en mousedown+mouseup) se perdería. 'mousedown' dispara
+        // de inmediato sobre el nodo actual, sin esa condición de carrera.
+        popover.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
             const cell = e.target.closest('.dr-cell:not(.empty)');
-            if (cell) {
-                const ts = parseInt(cell.dataset.ts, 10);
-                const d = new Date(ts);
-                if (!state.from || (state.from && state.to)) { state.from = d; state.to = null; state.hover = null; }
-                else if (ts < isoDay(state.from)) { state.to = state.from; state.from = d; }
-                else { state.to = d; }
-                render();
-                return;
-            }
+            if (!cell) return;
+            e.preventDefault();   // evita perder selección/foco al re-renderizar
+            const ts = parseInt(cell.dataset.ts, 10);
+            const d = new Date(ts);
+            if (!state.from || (state.from && state.to)) { state.from = d; state.to = null; state.hover = null; }
+            else if (ts < isoDay(state.from)) { state.to = state.from; state.from = d; }
+            else { state.to = d; }
+            render();
+        });
+
+        popover.addEventListener('click', (e) => {
+            if (e.target.closest('.dr-cell:not(.empty)')) return;   // ya manejado en mousedown
             if (e.target.closest('.dr-prev')) { state.pivot = new Date(state.pivot.getFullYear(), state.pivot.getMonth() - 1, 1); render(); }
             else if (e.target.closest('.dr-next')) { state.pivot = new Date(state.pivot.getFullYear(), state.pivot.getMonth() + 1, 1); render(); }
             else if (e.target.closest('[data-preset]')) {
                 const p = presets.find((x) => x.label === e.target.closest('[data-preset]').dataset.preset);
-                if (p) { const [a, b] = p.get(); state.from = a; state.to = b; state.pivot = new Date(a.getFullYear(), a.getMonth(), 1); render(); }
+                if (p && p.custom) {
+                    // Modo personalizado: limpia y deja al usuario elegir inicio y fin a mano.
+                    state.from = state.to = state.hover = null; state.custom = true; render();
+                } else if (p) {
+                    const [a, b] = p.get(); state.from = a; state.to = b; state.custom = false;
+                    state.pivot = new Date(a.getFullYear(), a.getMonth(), 1); render();
+                }
             }
             else if (e.target.closest('[data-action="close"]')) { close(); }
             else if (e.target.closest('[data-action="clear"]')) { state.from = state.to = null; render(); }
@@ -147,7 +183,7 @@
         popover.addEventListener('mouseover', (e) => {
             if (state.from && !state.to) {
                 const cell = e.target.closest('.dr-cell:not(.empty)');
-                if (cell) { state.hover = new Date(parseInt(cell.dataset.ts, 10)); render(); }
+                if (cell) { state.hover = new Date(parseInt(cell.dataset.ts, 10)); paintRange(); }   // sin re-render
             }
         });
 

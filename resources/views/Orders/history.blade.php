@@ -29,16 +29,7 @@
     <div class="card" style="margin-bottom:16px">
         <div class="card-body">
             <form id="filtros-form" class="filtros" onsubmit="return false">
-                <div class="row col-3">
-                    <div class="form-group">
-                        <label class="form-label">Estado</label>
-                        <select name="status" class="form-control">
-                            <option value="">Todos los estados</option>
-                            @foreach ($status as $id => $desc)
-                                <option value="{{ $id }}">{{ $desc }}</option>
-                            @endforeach
-                        </select>
-                    </div>
+                <div class="row col-4">
                     <div class="form-group">
                         <label class="form-label">Programación</label>
                         <select name="payment_schedule_id" class="form-control">
@@ -49,22 +40,67 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Rango de fecha (creación)</label>
-                        <div class="date-range" data-date-range id="date-range">
-                            <input type="text" class="form-control" placeholder="Selecciona un rango..." readonly>
-                        </div>
+                        <label class="form-label">Estado</label>
+                        <select name="status" class="form-control">
+                            <option value="">Todos los estados</option>
+                            @foreach ($status as $id => $desc)
+                                <option value="{{ $id }}">{{ $desc }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Tipo de orden</label>
+                        <select name="format_id" class="form-control">
+                            <option value="">Todos los tipos</option>
+                            @foreach ($tipos as $abrev => $desc)
+                                <option value="{{ $abrev }}">{{ $desc }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Responsable</label>
+                        <select name="user_responsible" class="form-control">
+                            <option value="">Todos los responsables</option>
+                            @foreach ($responsibles as $id => $name)
+                                <option value="{{ $id }}">{{ $name }}</option>
+                            @endforeach
+                        </select>
                     </div>
                 </div>
 
                 <div class="row col-4">
                     <div class="form-group">
-                        <label class="form-label">Buscar</label>
-                        <input type="text" name="q" class="form-control" placeholder="Código, título, empresa..." autocomplete="off">
+                        <label class="form-label">Moneda</label>
+                        <select name="currency" class="form-control">
+                            <option value="">Todas las monedas</option>
+                            @foreach ($currencies as $code => $label)
+                                <option value="{{ $code }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Empresa</label>
+                        <select name="company_id" class="form-control">
+                            <option value="">Todas las empresas</option>
+                            @foreach ($companies as $id => $name)
+                                <option value="{{ $id }}">{{ $name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Rango de fecha (creación)</label>
+                        <div class="date-range" data-date-range id="date-range">
+                            <input type="text" class="form-control" placeholder="Selecciona un rango..." readonly>
+                        </div>
                     </div>
                     <div class="form-group" style="display:flex;align-items:flex-end;gap:8px">
-                        <button type="button" id="btn-limpiar" class="btn btn-outline">
-                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h10M6 6V4a2 2 0 014 0v2M5 6l1 8h4l1-8"/></svg>
-                            Limpiar
+                        <div style="flex:1">
+                            <label class="form-label">Buscar</label>
+                            <input type="text" name="q" class="form-control" placeholder="Código, título, empresa..." autocomplete="off">
+                        </div>
+                        <button type="button" id="btn-recargar" class="btn btn-outline" title="Limpia los filtros y trae datos frescos de la base de datos">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 11-1.6-3.9M13.5 2.5V5H11"/></svg>
+                            Recargar
                         </button>
                     </div>
                 </div>
@@ -77,7 +113,7 @@
         <div class="card-header">
             <div>
                 <div class="card-title">Todas las órdenes</div>
-                <div class="card-subtitle">{{ $orders->count() }} orden(es)</div>
+                <div class="card-subtitle" id="ordenes-count">{{ $orders->count() }} orden(es)</div>
             </div>
         </div>
         <div class="card-body p-0">
@@ -96,41 +132,8 @@
                             <th data-orderable="false"></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        @foreach ($orders as $order)
-                            @php
-                                $detail = $order->detail;
-                                $amount = floatval($detail?->amount_neto ?? 0) > 0
-                                    ? floatval($detail->amount_neto)
-                                    : floatval($detail?->amount_ref ?? 0);
-                                $cur = ($detail?->currency === 'USD') ? '$ ' : 'S/ ';
-                            @endphp
-                            <tr
-                                data-status="{{ $order->status }}"
-                                data-schedule="{{ $order->payment_schedule_id }}"
-                                data-date="{{ $order->created_at?->format('Y-m-d') }}"
-                            >
-                                <td class="cell-mono">{{ $order->code }}</td>
-                                <td>{{ $order->company->name ?? '—' }}</td>
-                                <td>{{ $order->responsible->name ?? '—' }}</td>
-                                <td class="cell-strong">{{ \Illuminate\Support\Str::limit($order->title, 35) }}</td>
-                                <td><span class="status status-blue">{{ $order->format_id }}</span></td>
-                                <td data-order="{{ $order->status }}">
-                                    <span class="status {{ $statusClass((int) $order->status) }}">
-                                        {{ $statusNames[$order->status] ?? $order->status }}
-                                    </span>
-                                </td>
-                                <td data-order="{{ $order->created_at?->timestamp }}">{{ $order->created_at?->format('d/m/Y') }}</td>
-                                <td class="cell-strong" data-order="{{ $amount }}">{{ $amount > 0 ? $cur . number_format($amount, 2) : '—' }}</td>
-                                <td style="text-align:right;white-space:nowrap">
-                                    <button type="button" class="btn btn-outline btn-sm btn-timeline"
-                                            data-id="{{ $order->id }}" data-code="{{ $order->code }}" title="Línea de tiempo">
-                                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                                    </button>
-                                    <a href="{{ route('orders.show', ['order' => $order->id, 'from' => 'history']) }}" class="btn btn-outline btn-sm">Ver</a>
-                                </td>
-                            </tr>
-                        @endforeach
+                    <tbody id="ordenes-body">
+                        @include('Orders.partials.history-rows')
                     </tbody>
                 </table>
             </div>
@@ -153,14 +156,14 @@
 @push('scripts')
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/2.1.8/js/dataTables.min.js"></script>
-<script src="/src/date-range.js"></script>
+<script src="/src/date-range.js?v={{ @filemtime(public_path('src/date-range.js')) ?: time() }}"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('filtros-form');
     let rangeFrom = null, rangeTo = null;
 
-    const table = new DataTable('#tabla-ordenes', {
-        pageLength: 15,
+    const tableConfig = {
+        pageLength: 10,
         order: [],
         layout: { topStart: null, topEnd: null, bottomStart: 'info', bottomEnd: 'paging' },
         language: {
@@ -171,15 +174,27 @@ document.addEventListener('DOMContentLoaded', function () {
             emptyTable: 'No hay órdenes para mostrar',
             paginate: { previous: '← Anterior', next: 'Siguiente →' },
         },
-    });
+    };
+    let table = new DataTable('#tabla-ordenes', tableConfig);
 
     DataTable.ext.search.push(function (settings, data, dataIndex) {
         if (settings.nTable.id !== 'tabla-ordenes') return true;
-        const row    = table.row(dataIndex).node();
+        // Tomamos la fila desde 'settings' (tabla que se dibuja AHORA), no desde la variable
+        // 'table' del closure: durante el re-init aún apunta a la instancia vieja y reventaría.
+        const row    = settings.aoData[dataIndex].nTr;
+        if (!row) return true;
         const fStat  = form.elements['status'].value;
         const fSched = form.elements['payment_schedule_id'].value;
-        if (fStat  && row.dataset.status   !== fStat)  return false;
-        if (fSched && row.dataset.schedule !== fSched) return false;
+        const fFmt   = form.elements['format_id'].value;
+        const fResp  = form.elements['user_responsible'].value;
+        const fComp  = form.elements['company_id'].value;
+        const fCurr  = form.elements['currency'].value;
+        if (fStat  && row.dataset.status      !== fStat)  return false;
+        if (fSched && row.dataset.schedule    !== fSched) return false;
+        if (fFmt   && row.dataset.format      !== fFmt)   return false;
+        if (fResp  && row.dataset.responsible !== fResp)  return false;
+        if (fComp  && row.dataset.company     !== fComp)  return false;
+        if (fCurr  && row.dataset.currency    !== fCurr)  return false;
         if (rangeFrom && rangeTo && row.dataset.date) {
             const d = new Date(row.dataset.date + 'T00:00:00');
             if (d < rangeFrom || d > rangeTo) return false;
@@ -199,11 +214,31 @@ document.addEventListener('DOMContentLoaded', function () {
         table.draw();
     });
 
-    document.getElementById('btn-limpiar').addEventListener('click', function () {
-        form.reset();
-        if (dr.__clear) dr.__clear();
-        rangeFrom = rangeTo = null;
-        table.search('').draw();
+    // Recargar: limpia filtros + trae datos frescos de la BD (emula AJAX reusando el partial)
+    document.getElementById('btn-recargar').addEventListener('click', async function () {
+        this.disabled = true;
+        window.blockUI && window.blockUI('Actualizando…');
+        try {
+            const res = await fetch("{{ route('orders.history-rows') }}?_=" + Date.now(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+            const j   = await res.json().catch(() => ({}));
+            if (res.ok && j.status === 1) {
+                table.destroy();                                          // libera DataTables (conserva el DOM)
+                document.getElementById('ordenes-body').innerHTML = j.data.html;   // filas frescas
+                const cnt = document.getElementById('ordenes-count');
+                if (cnt) cnt.textContent = `${j.data.count} orden(es)`;   // actualiza el contador
+                table = new DataTable('#tabla-ordenes', tableConfig);     // re-inicializa
+                form.reset();                                            // limpia los inputs de filtro
+                if (dr.__clear) dr.__clear();                            // limpia el rango de fecha
+                rangeFrom = rangeTo = null;
+                table.search('').draw();
+            } else if (res.status === 419) {
+                (window.showToast || alert)('Tu sesión expiró. Recarga la página (F5).', 'error');
+            } else {
+                (window.showToast || alert)(j.description || 'No se pudo recargar.', 'error');
+            }
+        } catch (e) { (window.showToast || alert)('Error de red al recargar.', 'error'); }
+        window.unblockUI && window.unblockUI();
+        this.disabled = false;
     });
 });
 </script>

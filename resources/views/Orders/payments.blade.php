@@ -20,7 +20,34 @@
     <div class="card" style="margin-bottom:16px">
         <div class="card-body">
             <form id="filtros-form" class="filtros" onsubmit="return false">
-                <div class="row col-3">
+                <div class="row col-4">
+                    <div class="form-group">
+                        <label class="form-label">Programación</label>
+                        <select name="payment_schedule_id" class="form-control">
+                            <option value="">Todas las programaciones</option>
+                            @foreach ($schedules as $s)
+                                <option value="{{ $s->id }}">{{ $s->name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Tipo de orden</label>
+                        <select name="format_id" class="form-control">
+                            <option value="">Todos los tipos</option>
+                            @foreach ($tipos as $abrev => $desc)
+                                <option value="{{ $abrev }}">{{ $desc }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Moneda</label>
+                        <select name="currency" class="form-control">
+                            <option value="">Todas las monedas</option>
+                            @foreach ($currencies as $code => $label)
+                                <option value="{{ $code }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label class="form-label">Empresa (cuenta origen)</label>
                         <select name="company" class="form-control">
@@ -30,24 +57,24 @@
                             @endforeach
                         </select>
                     </div>
+                </div>
+
+                <div class="row col-3">
                     <div class="form-group">
                         <label class="form-label">Rango de fecha (depósito)</label>
                         <div class="date-range" data-date-range id="date-range">
                             <input type="text" class="form-control" placeholder="Selecciona un rango..." readonly>
                         </div>
                     </div>
-                    <div class="form-group" style="display:flex;align-items:flex-end;gap:8px">
-                        <button type="button" id="btn-limpiar" class="btn btn-outline">
-                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h10M6 6V4a2 2 0 014 0v2M5 6l1 8h4l1-8"/></svg>
-                            Limpiar
-                        </button>
-                    </div>
-                </div>
-
-                <div class="row col-4">
                     <div class="form-group">
                         <label class="form-label">Buscar</label>
                         <input type="text" name="q" class="form-control" placeholder="Orden, empresa, N° operación..." autocomplete="off">
+                    </div>
+                    <div class="form-group" style="display:flex;align-items:flex-end;gap:8px">
+                        <button type="button" id="btn-recargar" class="btn btn-outline" title="Limpia los filtros y trae datos frescos de la base de datos">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 11-1.6-3.9M13.5 2.5V5H11"/></svg>
+                            Recargar
+                        </button>
                     </div>
                 </div>
             </form>
@@ -59,7 +86,7 @@
         <div class="card-header">
             <div>
                 <div class="card-title">Abonos pagados</div>
-                <div class="card-subtitle">{{ $abonos->count() }} abono(s) con constancia</div>
+                <div class="card-subtitle" id="pagos-count">{{ $abonos->count() }} abono(s) con constancia</div>
             </div>
         </div>
         <div class="card-body p-0">
@@ -74,52 +101,31 @@
                             <th style="text-align:right">Monto</th>
                             <th>Vencimiento</th>
                             <th>Fecha depósito</th>
+                            <th>Banco origen</th>
                             <th>Cuenta origen</th>
                             <th>N° Operación</th>
                             <th data-orderable="false">Constancia</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        @foreach ($abonos as $ab)
-                            @php
-                                $o   = $ab->order;
-                                $cur = ($o->detail?->currency === 'USD') ? '$ ' : 'S/ ';
-                            @endphp
-                            <tr
-                                data-company="{{ $ab->source_company_id }}"
-                                data-date="{{ $ab->deposit_date ? \Carbon\Carbon::parse($ab->deposit_date)->format('Y-m-d') : '' }}"
-                            >
-                                <td class="cell-mono">{{ $o->code }}</td>
-                                <td>{{ $o->company->name ?? '—' }}</td>
-                                <td><span class="status status-blue">{{ \Illuminate\Support\Str::limit($o->paymentSchedule?->name, 14) }}</span></td>
-                                <td class="cell-strong">Cuota {{ $ab->quota_number }}</td>
-                                <td class="cell-strong" style="text-align:right" data-order="{{ $ab->amount }}">{{ $cur . number_format($ab->amount, 2) }}</td>
-                                <td>{{ $ab->due_date ? \Carbon\Carbon::parse($ab->due_date)->format('d/m/Y') : '—' }}</td>
-                                <td data-order="{{ $ab->deposit_date ? \Carbon\Carbon::parse($ab->deposit_date)->timestamp : 0 }}">
-                                    {{ $ab->deposit_date ? \Carbon\Carbon::parse($ab->deposit_date)->format('d/m/Y') : '—' }}
-                                </td>
-                                <td>
-                                    @if ($ab->source_account_number)
-                                        <div style="font-size:12px;line-height:1.35">
-                                            <div class="cell-strong">{{ $ab->source_bank ?: '—' }}</div>
-                                            <div class="cell-mono" style="color:var(--text-muted)">{{ $ab->source_account_number }}</div>
-                                        </div>
-                                    @else
-                                        <span style="color:var(--text-muted)">—</span>
-                                    @endif
-                                </td>
-                                <td class="cell-mono">{{ $ab->operation_number ?: '—' }}</td>
-                                <td>
-                                    @if ($ab->constancia)
-                                        <a href="/storage/{{ $ab->constancia }}" target="_blank" class="btn btn-outline btn-sm" style="color:var(--primary)">Ver</a>
-                                    @else
-                                        <span style="color:var(--text-muted)">—</span>
-                                    @endif
-                                </td>
-                            </tr>
-                        @endforeach
+                    <tbody id="pagos-body">
+                        @include('Orders.partials.payments-rows')
                     </tbody>
                 </table>
+            </div>
+        </div>
+    </div>
+
+    {{-- ── MODAL: Ver constancia (visor de archivo) ── --}}
+    <div class="modal-backdrop" id="modal-constancia-ver" style="display:none">
+        <div class="modal-dialog" style="max-width:900px">
+            <div class="modal-header" style="background:var(--text);border-bottom:none">
+                <h3 class="modal-title" style="color:#fff">Constancia <span id="cv-info" style="opacity:.7;font-weight:400"></span></h3>
+                <button type="button" class="modal-close" data-close="modal-constancia-ver" style="color:rgba(255,255,255,.7)">×</button>
+            </div>
+            <div class="modal-body" id="cv-body" style="min-height:200px;background:var(--bg-surface-secondary)"></div>
+            <div class="modal-footer">
+                <a id="cv-open" href="#" target="_blank" rel="noopener" class="btn btn-outline">Abrir en pestaña</a>
+                <button type="button" class="btn btn-primary" data-close="modal-constancia-ver">Cerrar</button>
             </div>
         </div>
     </div>
@@ -129,14 +135,14 @@
 @push('scripts')
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/2.1.8/js/dataTables.min.js"></script>
-<script src="/src/date-range.js"></script>
+<script src="/src/date-range.js?v={{ @filemtime(public_path('src/date-range.js')) ?: time() }}"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('filtros-form');
     let rangeFrom = null, rangeTo = null;
 
-    const table = new DataTable('#tabla-pagos', {
-        pageLength: 15,
+    const tableConfig = {
+        pageLength: 20,
         order: [],
         layout: { topStart: null, topEnd: null, bottomStart: 'info', bottomEnd: 'paging' },
         language: {
@@ -147,13 +153,22 @@ document.addEventListener('DOMContentLoaded', function () {
             emptyTable: 'No hay pagos para mostrar',
             paginate: { previous: '← Anterior', next: 'Siguiente →' },
         },
-    });
+    };
+    let table = new DataTable('#tabla-pagos', tableConfig);
 
     DataTable.ext.search.push(function (settings, data, dataIndex) {
         if (settings.nTable.id !== 'tabla-pagos') return true;
-        const row   = table.row(dataIndex).node();
-        const fComp = form.elements['company'].value;
-        if (fComp && row.dataset.company !== fComp) return false;
+        // Fila desde 'settings' (tabla en dibujo), no desde 'table' del closure (reventaría en el re-init).
+        const row   = settings.aoData[dataIndex].nTr;
+        if (!row) return true;
+        const fComp  = form.elements['company'].value;
+        const fSched = form.elements['payment_schedule_id'].value;
+        const fFmt   = form.elements['format_id'].value;
+        const fCurr  = form.elements['currency'].value;
+        if (fComp  && row.dataset.company  !== fComp)  return false;
+        if (fSched && row.dataset.schedule !== fSched) return false;
+        if (fFmt   && row.dataset.format   !== fFmt)   return false;
+        if (fCurr  && row.dataset.currency !== fCurr)  return false;
         if (rangeFrom && rangeTo && row.dataset.date) {
             const d = new Date(row.dataset.date + 'T00:00:00');
             if (d < rangeFrom || d > rangeTo) return false;
@@ -172,12 +187,62 @@ document.addEventListener('DOMContentLoaded', function () {
         table.draw();
     });
 
-    document.getElementById('btn-limpiar').addEventListener('click', function () {
-        form.reset();
-        if (dr.__clear) dr.__clear();
-        rangeFrom = rangeTo = null;
-        table.search('').draw();
+    // Recargar: limpia filtros + trae datos frescos de la BD (emula AJAX reusando el partial)
+    document.getElementById('btn-recargar').addEventListener('click', async function () {
+        this.disabled = true;
+        window.blockUI && window.blockUI('Actualizando…');
+        try {
+            const res = await fetch("{{ route('orders.payments.rows') }}?_=" + Date.now(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+            const j   = await res.json().catch(() => ({}));
+            if (res.ok && j.status === 1) {
+                table.destroy();
+                document.getElementById('pagos-body').innerHTML = j.data.html;
+                table = new DataTable('#tabla-pagos', tableConfig);
+                const cnt = document.getElementById('pagos-count');
+                if (cnt) cnt.textContent = `${j.data.count} abono(s) con constancia`;
+                form.reset();
+                if (dr.__clear) dr.__clear();
+                rangeFrom = rangeTo = null;
+                table.search('').draw();
+            } else if (res.status === 419) {
+                (window.showToast || alert)('Tu sesión expiró. Recarga la página (F5).', 'error');
+            } else {
+                (window.showToast || alert)(j.description || 'No se pudo recargar.', 'error');
+            }
+        } catch (e) { (window.showToast || alert)('Error de red al recargar.', 'error'); }
+        window.unblockUI && window.unblockUI();
+        this.disabled = false;
     });
 });
+</script>
+
+<script>
+// ── Ver constancia en modal (imagen embebida o PDF en iframe) ──
+(function () {
+    const openM  = (id) => { const el = document.getElementById(id); el.style.display = 'flex'; requestAnimationFrame(() => el.classList.add('show')); document.body.classList.add('modal-open'); };
+    const closeM = (id) => { const el = document.getElementById(id); el.classList.remove('show'); setTimeout(() => el.style.display = 'none', 180); document.body.classList.remove('modal-open'); };
+
+    document.addEventListener('click', (e) => {
+        const c = e.target.closest('[data-close]');
+        if (c) closeM(c.dataset.close);
+        if (e.target.classList.contains('modal-backdrop') && e.target.id === 'modal-constancia-ver') closeM('modal-constancia-ver');
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeM('modal-constancia-ver'); });
+
+    // Delegación sobre la tabla (sobrevive a paginación y al Recargar)
+    document.getElementById('tabla-pagos').addEventListener('click', (e) => {
+        const cv = e.target.closest('.constancia-link');
+        if (!cv) return;
+        e.preventDefault();
+        const url = cv.dataset.url;
+        const isPdf = /\.pdf(\?|$)/i.test(url);
+        document.getElementById('cv-info').textContent = `${cv.dataset.code} · Cuota ${cv.dataset.num}`;
+        document.getElementById('cv-open').href = url;
+        document.getElementById('cv-body').innerHTML = isPdf
+            ? `<iframe src="${url}" style="width:100%;height:75vh;border:0;display:block"></iframe>`
+            : `<img src="${url}" alt="Constancia" style="max-width:100%;display:block;margin:0 auto">`;
+        openM('modal-constancia-ver');
+    });
+})();
 </script>
 @endpush

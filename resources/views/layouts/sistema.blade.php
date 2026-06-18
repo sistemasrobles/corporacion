@@ -81,6 +81,32 @@
         })();
     </script>
 
+    {{-- Block UI global (procesando) --}}
+    <style>
+        .block-ui { position:fixed; inset:0; z-index:5000; display:flex; align-items:center; justify-content:center; background:rgba(15,23,42,.55); -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px); }
+        .block-ui[hidden] { display:none; }
+        .block-ui-card { display:flex; flex-direction:column; align-items:center; gap:14px; background:#fff; padding:26px 40px; border-radius:14px; box-shadow:0 12px 44px rgba(0,0,0,.28); }
+        .block-ui-spinner { width:38px; height:38px; border:4px solid #e5e7eb; border-top-color:var(--primary,#16a34a); border-radius:50%; animation:block-spin .8s linear infinite; }
+        .block-ui-text { font-size:14px; font-weight:600; color:var(--text,#1e293b); }
+        @keyframes block-spin { to { transform:rotate(360deg); } }
+    </style>
+    <div id="block-ui" class="block-ui" hidden>
+        <div class="block-ui-card">
+            <span class="block-ui-spinner"></span>
+            <span class="block-ui-text" id="block-ui-text">Procesando…</span>
+        </div>
+    </div>
+    <script>
+        window.blockUI = (msg) => {
+            const el = document.getElementById('block-ui');
+            document.getElementById('block-ui-text').textContent = msg || 'Procesando…';
+            el.hidden = false; document.body.style.overflow = 'hidden';
+        };
+        window.unblockUI = () => {
+            document.getElementById('block-ui').hidden = true; document.body.style.overflow = '';
+        };
+    </script>
+
     @stack('scripts')
 </body>
 </html>

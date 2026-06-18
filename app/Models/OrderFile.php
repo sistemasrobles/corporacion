@@ -8,9 +8,12 @@ class OrderFile extends Model
 {
     protected $table = 'orders_file';
 
-    public $incrementing = false;
+    // id autoincremental (sequence orders_file_id_seq); la BD asigna la PK.
+    protected $fillable = ['type_file', 'document_number', 'registration_code', 'has_retention', 'amount', 'emission_date', 'order_id', 'path', 'comentario', 'principal', 'created_by', 'updated_by'];
 
-    protected $fillable = ['id', 'type_file', 'document_number', 'registration_code', 'amount', 'emission_date', 'order_id', 'path', 'comentario', 'principal', 'created_by', 'updated_by'];
+    protected $casts = [
+        'has_retention' => 'boolean',
+    ];
 
     public function order()
     {

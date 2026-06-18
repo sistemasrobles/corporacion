@@ -167,7 +167,9 @@ return [
         App\Providers\AuthServiceProvider::class,
         // App\Providers\BroadcastServiceProvider::class,
         App\Providers\EventServiceProvider::class,
-        App\Providers\Filament\AdminPanelProvider::class,
+        // Panel Filament /erp DADO DE BAJA: el sistema migró al frontend Blade propio.
+        // Se deja comentado (no se borra) para poder reactivarlo si hiciera falta.
+        // App\Providers\Filament\AdminPanelProvider::class,
         App\Providers\RouteServiceProvider::class,
     ])->toArray(),
 

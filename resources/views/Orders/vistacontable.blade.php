@@ -40,6 +40,8 @@
 
 @push('styles')
 <style>
+    /* Código de Registro tipeado pero aún no guardado */
+    .reg-dirty .reg-input { border-color: #f59e0b; background: #fffbeb; }
     .sum-fs { border:1px solid var(--border-color); border-radius:var(--radius-lg); padding:16px 18px 10px; margin-bottom:16px; }
     .sum-fs > legend { font-size:11px; font-weight:700; color:var(--text-secondary); padding:0 8px; text-transform:uppercase; letter-spacing:.4px; }
     .sum-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px 18px; }
@@ -76,8 +78,8 @@
     @if ($p)
         <fieldset class="sum-fs"><legend>Proveedor</legend>
             <div class="sum-grid">
-                {!! $cell('RUC', $p['ruc']) !!}{!! $cell('Razón social', $p['razon_social']) !!}{!! $cell('Contacto', $p['contacto']) !!}{!! $cell('Correo', $p['email']) !!}
-                {!! $cell('Domicilio fiscal', $p['direccion']) !!}{!! $cell('Distrito', $p['distrito']) !!}
+                {!! $cell('RUC', $p['ruc']) !!}{!! $cell('Razón social', $p['razon_social']) !!}{!! $cell('Contacto', $p['contacto']) !!}{!! $cell('Celular', $p['celular'] ?? '—') !!}
+                {!! $cell('Correo', $p['email']) !!}{!! $cell('Domicilio fiscal', $p['direccion']) !!}{!! $cell('Distrito', $p['distrito']) !!}
                 @if ($p['cuenta'])
                     {!! $cell('Banco', $p['cuenta']['banco']) !!}{!! $cell('N° de cuenta', $p['cuenta']['numero']) !!}{!! $cell('CCI', $p['cuenta']['cci']) !!}{!! $cell('Moneda cuenta', $p['cuenta']['moneda']) !!}
                 @endif
@@ -97,6 +99,9 @@
                 @endforelse
             </tbody>
         </table></div>
+        @if (!empty($vm['observacion']))
+            <div class="sum-just"><span class="sum-l">Observaciones</span><span class="sum-v">{{ $vm['observacion'] }}</span></div>
+        @endif
     </fieldset>
 
     {{-- Condición de pago --}}
@@ -112,7 +117,7 @@
     {{-- Cronograma de pagos --}}
     <fieldset class="sum-fs"><legend>Cronograma de pagos</legend>
         <div class="table-responsive"><table class="table">
-            <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>Documento</th><th>F. Subida</th><th>N° Operación</th></tr></thead>
+            <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>Documento</th><th>F. Subida</th><th>N° Operación</th><th>Subido por</th></tr></thead>
             <tbody>
                 @forelse ($cuotas as $q)
                     <tr>
@@ -123,9 +128,10 @@
                         <td>@if ($q['constancia'])<a href="{{ $q['constancia'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else <span style="color:var(--text-muted)">—</span>@endif</td>
                         <td>{{ $q['const_fecha'] ?: '—' }}</td>
                         <td class="cell-mono">{{ $q['operacion'] ?: '—' }}</td>
+                        <td>{{ $q['subido_por'] ?? '—' }}</td>
                     </tr>
                 @empty
-                    <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:10px">Sin cronograma</td></tr>
+                    <tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:10px">Sin cronograma</td></tr>
                 @endforelse
             </tbody>
         </table></div>
@@ -135,7 +141,7 @@
     @if (count($comprobantes))
         <fieldset class="sum-fs"><legend>Comprobantes de pago</legend>
             <div class="table-responsive"><table class="table">
-                <thead><tr><th>Tipo</th><th>N° Doc</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>F. Subida</th><th>Archivo</th></tr></thead>
+                <thead><tr><th>Tipo</th><th>N° Doc</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Comentario</th><th>F. Subida</th><th>Subido por</th><th>Archivo</th></tr></thead>
                 <tbody>
                     @foreach ($comprobantes as $x)
                         <tr>
@@ -144,7 +150,9 @@
                             <td style="text-align:right">{{ $x['monto'] }}</td>
                             <td>{{ $x['fecha'] }}</td>
                             <td class="cell-mono">{{ $x['cod_registro'] ?: '—' }}</td>
+                            <td>{{ $x['comentario'] ?: '—' }}</td>
                             <td>{{ $x['subida'] }}</td>
+                            <td>{{ $x['uploader'] ?? '—' }}</td>
                             <td>@if ($x['path'])<a href="{{ $x['path'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else — @endif</td>
                         </tr>
                     @endforeach
@@ -157,13 +165,14 @@
     @if (count($anexos))
         <fieldset class="sum-fs" style="margin-bottom:0"><legend>Documentos anexos</legend>
             <div class="table-responsive"><table class="table">
-                <thead><tr><th>Tipo</th><th>Comentario</th><th>F. Subida</th><th>Archivo</th></tr></thead>
+                <thead><tr><th>Tipo</th><th>Comentario</th><th>F. Subida</th><th>Subido por</th><th>Archivo</th></tr></thead>
                 <tbody>
                     @foreach ($anexos as $x)
                         <tr>
                             <td>{{ $x['tipo'] }}</td>
                             <td>{{ $x['comentario'] }}</td>
                             <td>{{ $x['subida'] }}</td>
+                            <td>{{ $x['uploader'] ?? '—' }}</td>
                             <td>@if ($x['path'])<a href="{{ $x['path'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else — @endif</td>
                         </tr>
                     @endforeach
@@ -351,7 +360,7 @@
                 <td>${d.path ? `<a href="${esc(d.path)}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
                 <td>
                     <div style="display:flex;gap:6px;align-items:center">
-                        <input type="text" class="form-control reg-input" data-fid="${d.id}" maxlength="100" value="${esc(d.registration_code)}" placeholder="REG-2026-00123">
+                        <input type="text" class="form-control reg-input" data-fid="${d.id}" data-saved="${esc(d.registration_code)}" maxlength="100" value="${esc(d.registration_code)}" placeholder="REG-2026-00123">
                         <button type="button" class="btn btn-primary btn-sm reg-save" data-fid="${d.id}" title="Guardar código">
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
                         </button>
@@ -370,16 +379,38 @@
         if (!codigo) { showToast('Ingresa el código.', 'warning'); return; }
         btn.disabled = true;
         const r = await post(`${BASE}/${OID}/registro/${btn.dataset.fid}`, { codigo });
-        if (r.ok && r.json.status === 1) { showToast(r.json.description, 'success'); }
-        else { showToast(r.json.description || 'No se pudo guardar.', 'error'); }
+        if (r.ok && r.json.status === 1) {
+            input.dataset.saved = codigo;                 // marca como guardado
+            input.closest('tr').classList.remove('reg-dirty');
+            showToast(r.json.description, 'success');
+        } else { showToast(r.json.description || 'No se pudo guardar.', 'error'); }
         btn.disabled = false;
     });
 
+    // Marca la fila como "sin guardar" mientras se edita sin presionar ✓
+    regList.addEventListener('input', (e) => {
+        const input = e.target.closest('.reg-input');
+        if (!input) return;
+        input.closest('tr').classList.toggle('reg-dirty', input.value.trim() !== (input.dataset.saved || '').trim());
+    });
+
     document.getElementById('reg-advance').addEventListener('click', async function () {
+        // Pre-chequeo: todos los documentos con código y GUARDADO (no solo tipeado).
+        const inputs = [...regList.querySelectorAll('.reg-input')];
+        if (!inputs.length || inputs.some(i => !i.value.trim())) {
+            showToast('Ingresa el Código de Registro de todos los documentos de pago.', 'warning'); return;
+        }
+        if (inputs.some(i => i.value.trim() !== (i.dataset.saved || '').trim())) {
+            showToast('Hay códigos sin guardar. Guarda cada uno con el botón ✓ antes de continuar.', 'warning'); return;
+        }
+        if (this.disabled) return;                                  // evita dobles envíos
         this.disabled = true; this.textContent = 'Avanzando...';
+        window.blockUI && window.blockUI('Procesando…');            // bloquea toda la pantalla
         const r = await post(`${BASE}/${OID}/registro-advance`);
         if (r.ok && r.json.status === 1) { showToast(r.json.description, 'success'); setTimeout(() => location = "{{ route('orders.view') }}", 900); return; }
-        showToast(r.json.description || 'No se pudo avanzar.', 'error');
+        const msg = r.json.description || (r.json.errors && Object.values(r.json.errors)[0]?.[0]) || r.json.message || 'No se pudo avanzar.';
+        showToast(msg, 'error');
+        window.unblockUI && window.unblockUI();
         this.disabled = false; this.innerHTML = 'Pasar a Código de Banco →';
     });
 @else
@@ -389,10 +420,14 @@
     document.getElementById('cb-save').addEventListener('click', async function () {
         const codigo = (document.getElementById('cb-input').value || '').trim();
         if (!codigo) { showToast('Ingresa el código de banco.', 'warning'); return; }
+        if (this.disabled) return;                                  // evita dobles envíos
         this.disabled = true; this.textContent = 'Guardando...';
+        window.blockUI && window.blockUI('Procesando…');            // bloquea toda la pantalla
         const r = await post("{{ route('orders.code', $o->id) }}", { codigo });
         if (r.ok && r.json.status === 1) { showToast(r.json.description, 'success'); setTimeout(() => location = "{{ route('orders.view') }}", 900); return; }
-        showToast(r.json.description || 'No se pudo guardar.', 'error');
+        const msg = r.json.description || (r.json.errors && Object.values(r.json.errors)[0]?.[0]) || r.json.message || 'No se pudo guardar.';
+        showToast(msg, 'error');
+        window.unblockUI && window.unblockUI();
         this.disabled = false; this.textContent = 'Guardar y pasar a Cierre';
     });
 @endif
@@ -402,10 +437,14 @@
     // ── Terminar flujo (cierre) — UC3/UC4 ──
     document.getElementById('btn-close').addEventListener('click', () => openM('modal-close'));
     document.getElementById('close-confirm').addEventListener('click', async function () {
+        if (this.disabled) return;                                  // evita dobles envíos
         this.disabled = true; this.textContent = 'Cerrando...';
+        window.blockUI && window.blockUI('Procesando…');            // bloquea toda la pantalla
         const r = await post("{{ route('orders.approve', $o->id) }}");
         if (r.ok && r.json.status === 1) { showToast(r.json.description, 'success'); setTimeout(() => location = "{{ route('orders.view') }}", 900); return; }
-        showToast(r.json.description || 'No se pudo cerrar.', 'error');
+        const msg = r.json.description || (r.json.errors && Object.values(r.json.errors)[0]?.[0]) || r.json.message || 'No se pudo cerrar.';
+        showToast(msg, 'error');
+        window.unblockUI && window.unblockUI();
         this.disabled = false; this.textContent = 'Sí, terminar flujo';
     });
 @endif
