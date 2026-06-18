@@ -17,6 +17,7 @@ use App\Models\Company;
 use App\Models\Area;
 use App\Models\Master;
 use App\Models\User;
+use App\Support\RefundStorage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
@@ -567,7 +568,7 @@ class RefundController extends Controller
         ]);
 
         $file = $request->file('constancia');
-        $path = $file->store('requirements/constancias', 'public');
+        $path = RefundStorage::put($file, 'requirements/constancias');
 
         DB::transaction(function () use ($refund, $user, $file, $path) {
             // Adjunta el archivo al abono; el N° de operación ya quedó registrado al abonar.
@@ -637,7 +638,7 @@ class RefundController extends Controller
             'amount'          => $data['amount'],
             'issue_date'      => $data['issue_date'],
             'file_name'       => $file->getClientOriginalName(),
-            'file_path'       => $file->store('requirements/comprobantes', 'public'),
+            'file_path'       => RefundStorage::put($file, 'requirements/comprobantes'),
             'file_size'       => $file->getSize(),
             'uploaded_by'     => $user->id,
             'uploaded_at'     => now(),
@@ -654,7 +655,7 @@ class RefundController extends Controller
             abort(404);
         }
         if ($file->file_path) {
-            Storage::disk('public')->delete($file->file_path);
+            RefundStorage::delete($file->file_path);
         }
         $file->delete();
 
@@ -742,7 +743,7 @@ class RefundController extends Controller
                 'account_destination' => $refund->beneficiary_account,
                 'transaction_code'    => $data['transaction_code'] ?? null,
                 'file_name'           => $file->getClientOriginalName(),
-                'file_path'           => $file->store('requirements/reembolsos', 'public'),
+                'file_path'           => RefundStorage::put($file, 'requirements/reembolsos'),
                 'notes'               => 'Reembolso del faltante desde ' . $company->name,
                 'uploaded_by'         => $user->id,
                 'uploaded_at'         => now(),
@@ -792,7 +793,7 @@ class RefundController extends Controller
             'account_destination' => $abono?->account_origin,
             'transaction_code'    => $data['transaction_code'] ?? null,
             'file_name'        => $file->getClientOriginalName(),
-            'file_path'        => $file->store('requirements/devoluciones', 'public'),
+            'file_path'        => RefundStorage::put($file, 'requirements/devoluciones'),
             'notes'            => 'Devolución del sobrante a la empresa',
             'uploaded_by'      => $user->id,
             'uploaded_at'      => now(),

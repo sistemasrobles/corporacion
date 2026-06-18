@@ -56,7 +56,26 @@ return [
             'throw' => false,
         ],
 
+        // DigitalOcean Spaces (S3-compatible). Archivos PRIVADOS: se entregan por URL temporal firmada.
+        'spaces' => [
+            'driver' => 's3',
+            'key' => env('DO_SPACES_KEY'),
+            'secret' => env('DO_SPACES_SECRET'),
+            'region' => env('DO_SPACES_REGION'),
+            'bucket' => env('DO_SPACES_BUCKET'),
+            'endpoint' => env('DO_SPACES_ENDPOINT'),
+            'use_path_style_endpoint' => false,
+            'visibility' => 'private',
+            'throw' => false,
+        ],
+
     ],
+
+    /*
+    | Disco donde el módulo de Requerimientos guarda sus archivos.
+    | dev: 'public' (local) · prod: 'spaces' (DigitalOcean). Se controla por env.
+    */
+    'refund_disk' => env('REFUND_DISK', 'public'),
 
     /*
     |--------------------------------------------------------------------------

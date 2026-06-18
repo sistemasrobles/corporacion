@@ -246,7 +246,7 @@
                                 <td class="cell-mono">{{ $cf->document_number }}</td>
                                 <td>{{ $cf->issue_date?->format('d/m/Y') }}</td>
                                 <td style="text-align:right" class="cell-strong">{{ $curr . number_format($cf->amount, 2) }}</td>
-                                <td>@if($cf->file_path)<a href="{{ asset('storage/' . $cf->file_path) }}" target="_blank" class="link">ver</a>@endif</td>
+                                <td>@if($cf->file_path)<a href="{{ \App\Support\RefundStorage::url($cf->file_path) }}" target="_blank" class="link">ver</a>@endif</td>
                                 <td style="text-align:center"><button type="button" class="btn-remove btn-del-comp" data-id="{{ $cf->id }}" title="Eliminar">×</button></td>
                             </tr>
                         @empty
