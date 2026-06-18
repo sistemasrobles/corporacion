@@ -33,7 +33,15 @@ return new class extends Migration
             DB::statement("CREATE SEQUENCE IF NOT EXISTS orders_file_id_seq");
             DB::statement("ALTER TABLE orders_file ALTER COLUMN id SET DEFAULT nextval('orders_file_id_seq')");
             DB::statement("ALTER SEQUENCE orders_file_id_seq OWNED BY orders_file.id");
-            DB::statement("SELECT setval('orders_file_id_seq', (SELECT COALESCE(MAX(id), 0) FROM orders_file))");
+            // Empty-safe: con tabla vacía deja la secuencia lista para el id 1 (is_called=false);
+            // con filas, la deja en MAX (próximo id = MAX+1). Evita el error setval(seq, 0).
+            DB::statement("
+                SELECT setval(
+                    'orders_file_id_seq',
+                    COALESCE((SELECT MAX(id) FROM orders_file), 1),
+                    EXISTS (SELECT 1 FROM orders_file)
+                )
+            ");
         });
     }
 
