@@ -72,10 +72,11 @@ return [
     ],
 
     /*
-    | Disco donde el módulo de Requerimientos guarda sus archivos.
+    | Disco donde la app (Órdenes y Requerimientos) guarda sus archivos.
     | dev: 'public' (local) · prod: 'spaces' (DigitalOcean). Se controla por env.
+    | (Acepta el antiguo REFUND_DISK por compatibilidad.)
     */
-    'refund_disk' => env('REFUND_DISK', 'public'),
+    'files_disk' => env('FILES_DISK', env('REFUND_DISK', 'public')),
 
     /*
     |--------------------------------------------------------------------------

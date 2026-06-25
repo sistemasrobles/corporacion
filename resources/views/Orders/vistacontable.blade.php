@@ -30,10 +30,22 @@
             {{ $codeLabel }}
         </button>
     @endif
+    @if ($canEditCodes)
+        <button type="button" id="btn-editcodes" class="btn btn-outline" style="color:var(--primary)">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/></svg>
+            Editar códigos
+        </button>
+    @endif
     @if ($isClose)
         <button type="button" id="btn-close" class="btn btn-primary" style="background:var(--green);border-color:var(--green)">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
             Terminar flujo
+        </button>
+    @endif
+    @if ($isConform)
+        <button type="button" id="btn-conform" class="btn btn-primary" style="background:var(--green);border-color:var(--green)">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2V5a2 2 0 012-2h11"/></svg>
+            {{ $conformLabel }}
         </button>
     @endif
 @endsection
@@ -117,7 +129,7 @@
     {{-- Cronograma de pagos --}}
     <fieldset class="sum-fs"><legend>Cronograma de pagos</legend>
         <div class="table-responsive"><table class="table">
-            <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>Documento</th><th>F. Subida</th><th>N° Operación</th><th>Subido por</th></tr></thead>
+            <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>Documento</th><th>F. Subida</th><th>N° Operación</th><th>Subido por</th><th>Cód. Banco</th></tr></thead>
             <tbody>
                 @forelse ($cuotas as $q)
                     <tr>
@@ -129,9 +141,10 @@
                         <td>{{ $q['const_fecha'] ?: '—' }}</td>
                         <td class="cell-mono">{{ $q['operacion'] ?: '—' }}</td>
                         <td>{{ $q['subido_por'] ?? '—' }}</td>
+                        <td class="cell-mono">{{ $q['codigo_banco'] ?? '—' }}</td>
                     </tr>
                 @empty
-                    <tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:10px">Sin cronograma</td></tr>
+                    <tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:10px">Sin cronograma</td></tr>
                 @endforelse
             </tbody>
         </table></div>
@@ -141,11 +154,12 @@
     @if (count($comprobantes))
         <fieldset class="sum-fs"><legend>Comprobantes de pago</legend>
             <div class="table-responsive"><table class="table">
-                <thead><tr><th>Tipo</th><th>N° Doc</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Comentario</th><th>F. Subida</th><th>Subido por</th><th>Archivo</th></tr></thead>
+                <thead><tr><th>Tipo</th><th>Serie</th><th>N° Doc</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Comentario</th><th>F. Subida</th><th>Subido por</th><th>Archivo</th></tr></thead>
                 <tbody>
                     @foreach ($comprobantes as $x)
                         <tr>
                             <td>{{ $x['tipo'] }}</td>
+                            <td class="cell-mono">{{ $x['serie'] ?? '—' }}</td>
                             <td class="cell-mono">{{ $x['numero'] }}</td>
                             <td style="text-align:right">{{ $x['monto'] }}</td>
                             <td>{{ $x['fecha'] }}</td>
@@ -189,28 +203,74 @@
 <div class="modal-backdrop" id="modal-registro" style="display:none">
     <div class="modal-dialog modal-lg">
         <div class="modal-header" style="background:var(--text);border-bottom:none">
-            <h3 class="modal-title" style="color:#fff">Código de Registro <span style="opacity:.7;font-weight:400">{{ $o->code }}</span></h3>
+            <h3 class="modal-title" style="color:#fff">{{ $codeLabel }} <span style="opacity:.7;font-weight:400">{{ $o->code }}</span></h3>
             <button type="button" class="modal-close" data-close="modal-registro" style="color:rgba(255,255,255,.7)">×</button>
         </div>
         <div class="modal-body">
             <p style="color:var(--text-muted);font-size:13px;margin:0 0 12px">
-                Asigna el código de registro a cada documento de pago. Una vez guardado, el documento ya no podrá eliminarse.
+                Asigna el {{ $codeLabel }} a cada documento de pago. Una vez guardado, el documento ya no podrá eliminarse.
             </p>
             <div class="table-responsive">
                 <table class="table">
-                    <thead><tr><th>Tipo</th><th>N° Documento</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Archivo</th><th style="min-width:230px">Código de Registro</th></tr></thead>
+                    <thead><tr><th>Tipo</th><th>Serie</th><th>N° Documento</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Archivo</th><th style="min-width:230px">{{ $codeLabel }}</th></tr></thead>
                     <tbody id="reg-list"></tbody>
                 </table>
             </div>
         </div>
         <div class="modal-footer">
             <button type="button" class="btn btn-outline" data-close="modal-registro">Cerrar</button>
-            <button type="button" id="reg-advance" class="btn btn-primary">Pasar a Código de Banco →</button>
+            <button type="button" id="reg-advance" class="btn btn-primary">{{ $codeField === 'codigo_banco' ? 'Guardar y pasar a Cierre →' : 'Pasar a Código de Banco →' }}</button>
+        </div>
+    </div>
+</div>
+@elseif ($codeMode === 'perabono')
+{{-- ── MODAL: Código de Banco por voucher de abono — UC2 (urgente) ── --}}
+<div class="modal-backdrop" id="modal-abonobank" style="display:none">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-header" style="background:var(--text);border-bottom:none">
+            <h3 class="modal-title" style="color:#fff">{{ $codeLabel }} <span style="opacity:.7;font-weight:400">{{ $o->code }}</span></h3>
+            <button type="button" class="modal-close" data-close="modal-abonobank" style="color:rgba(255,255,255,.7)">×</button>
+        </div>
+        <div class="modal-body">
+            <p style="color:var(--text-muted);font-size:13px;margin:0 0 12px">
+                Asigna el {{ $codeLabel }} a cada voucher de abono. Una vez guardados todos, podrás pasar al cierre.
+            </p>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>Voucher</th><th>N° Operación</th><th style="min-width:230px">{{ $codeLabel }}</th></tr></thead>
+                    <tbody id="ban-list">
+                        @forelse ($cuotas as $q)
+                            <tr data-qid="{{ $q['id'] }}">
+                                <td class="cell-strong">Cuota {{ $q['numero'] }}</td>
+                                <td>{{ $q['fecha'] }}</td>
+                                <td class="cell-strong" style="text-align:right">{{ $q['monto'] }}</td>
+                                <td><span class="status {{ $abCls($q['estado_id']) }}">{{ $q['estado'] }}</span></td>
+                                <td>@if ($q['constancia'])<a href="{{ $q['constancia'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else <span style="color:var(--text-muted)">—</span>@endif</td>
+                                <td class="cell-mono">{{ $q['operacion'] ?: '—' }}</td>
+                                <td>
+                                    <div style="display:flex;gap:6px;align-items:center">
+                                        <input type="text" class="form-control ban-input" data-qid="{{ $q['id'] }}" data-saved="{{ $q['codigo_banco'] }}" maxlength="100" value="{{ $q['codigo_banco'] }}" placeholder="BCO-2026-00045">
+                                        <button type="button" class="btn btn-primary btn-sm ban-save" data-qid="{{ $q['id'] }}" title="Guardar código">
+                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        @empty
+                            <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">No hay vouchers de abono.</td></tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline" data-close="modal-abonobank">Cerrar</button>
+            <button type="button" id="ban-advance" class="btn btn-primary">Guardar y pasar a Cierre →</button>
         </div>
     </div>
 </div>
 @else
-{{-- ── MODAL: Código de Banco (a nivel de orden) — UC2 ── --}}
+{{-- ── MODAL: Código de Banco (a nivel de orden) — UC2 (legacy, sin uso) ── --}}
 <div class="modal-backdrop" id="modal-codebanco" style="display:none">
     <div class="modal-dialog modal-sm">
         <div class="modal-header" style="background:var(--text);border-bottom:none">
@@ -248,6 +308,97 @@
         <div class="modal-footer">
             <button type="button" class="btn btn-outline" data-close="modal-close">Cancelar</button>
             <button type="button" id="close-confirm" class="btn btn-primary" style="background:var(--green);border-color:var(--green)">Sí, terminar flujo</button>
+        </div>
+    </div>
+</div>
+@endif
+
+@if ($isConform)
+{{-- ── MODAL: Conformidad final (UC2 general @55) ── --}}
+<div class="modal-backdrop" id="modal-conform" style="display:none">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-header" style="background:var(--text);border-bottom:none">
+            <h3 class="modal-title" style="color:#fff">Dar conformidad <span style="opacity:.7;font-weight:400">{{ $o->code }}</span></h3>
+            <button type="button" class="modal-close" data-close="modal-conform" style="color:rgba(255,255,255,.7)">×</button>
+        </div>
+        <div class="modal-body">
+            <p style="margin:0;color:var(--text-secondary);font-size:14px;line-height:1.5">
+                Confirmas que <strong>todos los abonos están conformes</strong> y con su código de banco registrado.
+                La orden pasa a <strong>cierre contable</strong>. ¿Deseas continuar?
+            </p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline" data-close="modal-conform">Cancelar</button>
+            <button type="button" id="conform-confirm" class="btn btn-primary" style="background:var(--green);border-color:var(--green)">Sí, dar conformidad</button>
+        </div>
+    </div>
+</div>
+@endif
+
+@if ($canEditCodes)
+{{-- ── MODAL: Editar códigos (registro + banco) antes de cerrar — UC3 urgente / UC4 general ── --}}
+<div class="modal-backdrop" id="modal-editcodes" style="display:none">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-header" style="background:var(--text);border-bottom:none">
+            <h3 class="modal-title" style="color:#fff">Editar códigos <span style="opacity:.7;font-weight:400">{{ $o->code }}</span></h3>
+            <button type="button" class="modal-close" data-close="modal-editcodes" style="color:rgba(255,255,255,.7)">×</button>
+        </div>
+        <div class="modal-body">
+            <p style="color:var(--text-muted);font-size:13px;margin:0 0 12px">
+                Corrige los códigos ya registrados antes de cerrar la orden. Cada cambio queda registrado en el historial.
+            </p>
+
+            <fieldset class="sum-fs"><legend>Comprobantes de pago — Código de Registro</legend>
+                <div class="table-responsive"><table class="table">
+                    <thead><tr><th>Tipo</th><th>Serie</th><th>N° Doc</th><th style="text-align:right">Monto</th><th>Archivo</th><th style="min-width:230px">Código de Registro</th></tr></thead>
+                    <tbody>
+                        @forelse ($comprobantes as $x)
+                            <tr>
+                                <td>{{ $x['tipo'] }}</td>
+                                <td class="cell-mono">{{ $x['serie'] ?? '—' }}</td>
+                                <td class="cell-mono">{{ $x['numero'] }}</td>
+                                <td style="text-align:right">{{ $x['monto'] }}</td>
+                                <td>@if ($x['path'])<a href="{{ $x['path'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else <span style="color:var(--text-muted)">—</span>@endif</td>
+                                <td>
+                                    <div style="display:flex;gap:6px;align-items:center">
+                                        <input type="text" class="form-control ec-reg" data-fid="{{ $x['id'] }}" data-saved="{{ $x['cod_registro'] }}" maxlength="100" value="{{ $x['cod_registro'] }}" placeholder="REG-2026-00123">
+                                        <button type="button" class="btn btn-primary btn-sm ec-reg-save" data-fid="{{ $x['id'] }}" title="Guardar"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></button>
+                                    </div>
+                                </td>
+                            </tr>
+                        @empty
+                            <tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:12px;font-style:italic">Sin comprobantes de pago.</td></tr>
+                        @endforelse
+                    </tbody>
+                </table></div>
+            </fieldset>
+
+            <fieldset class="sum-fs" style="margin-bottom:0"><legend>Cronograma / constancias de abono — Código de Banco</legend>
+                <div class="table-responsive"><table class="table">
+                    <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Voucher</th><th style="min-width:230px">Código de Banco</th></tr></thead>
+                    <tbody>
+                        @forelse ($cuotas as $q)
+                            <tr>
+                                <td class="cell-strong">Cuota {{ $q['numero'] }}</td>
+                                <td>{{ $q['fecha'] }}</td>
+                                <td class="cell-strong" style="text-align:right">{{ $q['monto'] }}</td>
+                                <td>@if ($q['constancia'])<a href="{{ $q['constancia'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else <span style="color:var(--text-muted)">—</span>@endif</td>
+                                <td>
+                                    <div style="display:flex;gap:6px;align-items:center">
+                                        <input type="text" class="form-control ec-ban" data-qid="{{ $q['id'] }}" data-saved="{{ $q['codigo_banco'] }}" maxlength="100" value="{{ $q['codigo_banco'] }}" placeholder="BCO-2026-00045">
+                                        <button type="button" class="btn btn-primary btn-sm ec-ban-save" data-qid="{{ $q['id'] }}" title="Guardar"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></button>
+                                    </div>
+                                </td>
+                            </tr>
+                        @empty
+                            <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:12px;font-style:italic">Sin abonos.</td></tr>
+                        @endforelse
+                    </tbody>
+                </table></div>
+            </fieldset>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline" data-close="modal-editcodes">Cerrar</button>
         </div>
     </div>
 </div>
@@ -317,7 +468,7 @@
     document.addEventListener('click', (e) => {
         const c = e.target.closest('[data-close]');
         if (c) closeM(c.dataset.close);
-        if (e.target.classList.contains('modal-backdrop') && ['modal-registro', 'modal-codebanco', 'modal-close', 'modal-observe', 'modal-timeline'].includes(e.target.id)) closeM(e.target.id);
+        if (e.target.classList.contains('modal-backdrop') && ['modal-registro', 'modal-abonobank', 'modal-codebanco', 'modal-close', 'modal-conform', 'modal-editcodes', 'modal-observe', 'modal-timeline'].includes(e.target.id)) closeM(e.target.id);
     });
 
     async function post(url, body) {
@@ -333,7 +484,10 @@
 
 @if ($isCode)
 @if ($codeMode === 'perdoc')
-    // ── Código de Registro por documento (UC1) ──
+    // ── Código por documento de pago: Registro (UC1) o Banco (UC2 urgente) ──
+    const CODE_PROP = '{{ $codeField === 'codigo_banco' ? 'bank_code' : 'registration_code' }}';   // columna en orders_file
+    const CODE_PH   = '{{ $codeField === 'codigo_banco' ? 'BCO-2026-00045' : 'REG-2026-00123' }}';
+    const CODE_LBL  = @json($codeLabel);
     const regList = document.getElementById('reg-list');
 
     function regSkeleton(n = 3) {
@@ -346,21 +500,22 @@
             const json = await res.json();
             renderRegistro(json.data || []);
         } catch (e) {
-            regList.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--red);padding:14px">Error al cargar.</td></tr>`;
+            regList.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--red);padding:14px">Error al cargar.</td></tr>`;
         }
     }
     function renderRegistro(list) {
-        if (!list.length) { regList.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">No hay documentos de pago.</td></tr>`; return; }
+        if (!list.length) { regList.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">No hay documentos de pago.</td></tr>`; return; }
         regList.innerHTML = list.map(d => `
             <tr data-fid="${d.id}">
                 <td>${esc(d.type_label)}</td>
+                <td class="cell-mono">${d.serie ? esc(d.serie) : '—'}</td>
                 <td class="cell-mono">${esc(d.document_number)}</td>
                 <td class="cell-strong" style="text-align:right">${esc(d.amount)}</td>
                 <td>${esc(d.emission_date)}</td>
                 <td>${d.path ? `<a href="${esc(d.path)}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
                 <td>
                     <div style="display:flex;gap:6px;align-items:center">
-                        <input type="text" class="form-control reg-input" data-fid="${d.id}" data-saved="${esc(d.registration_code)}" maxlength="100" value="${esc(d.registration_code)}" placeholder="REG-2026-00123">
+                        <input type="text" class="form-control reg-input" data-fid="${d.id}" data-saved="${esc(d[CODE_PROP])}" maxlength="100" value="${esc(d[CODE_PROP])}" placeholder="${CODE_PH}">
                         <button type="button" class="btn btn-primary btn-sm reg-save" data-fid="${d.id}" title="Guardar código">
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
                         </button>
@@ -398,7 +553,7 @@
         // Pre-chequeo: todos los documentos con código y GUARDADO (no solo tipeado).
         const inputs = [...regList.querySelectorAll('.reg-input')];
         if (!inputs.length || inputs.some(i => !i.value.trim())) {
-            showToast('Ingresa el Código de Registro de todos los documentos de pago.', 'warning'); return;
+            showToast(`Ingresa el ${CODE_LBL} de todos los documentos de pago.`, 'warning'); return;
         }
         if (inputs.some(i => i.value.trim() !== (i.dataset.saved || '').trim())) {
             showToast('Hay códigos sin guardar. Guarda cada uno con el botón ✓ antes de continuar.', 'warning'); return;
@@ -413,8 +568,51 @@
         window.unblockUI && window.unblockUI();
         this.disabled = false; this.innerHTML = 'Pasar a Código de Banco →';
     });
+@elseif ($codeMode === 'perabono')
+    // ── Código de Banco por voucher de abono (UC2 urgente) → orders_quotas.codigo_banco ──
+    const banList = document.getElementById('ban-list');
+    document.getElementById('btn-registro').addEventListener('click', () => openM('modal-abonobank'));
+
+    banList.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.ban-save');
+        if (!btn) return;
+        const input = banList.querySelector(`.ban-input[data-qid="${btn.dataset.qid}"]`);
+        const codigo = (input.value || '').trim();
+        if (!codigo) { showToast('Ingresa el código de banco.', 'warning'); return; }
+        btn.disabled = true;
+        const r = await post(`${BASE}/abono/${btn.dataset.qid}/bankcode`, { codigo_banco: codigo });
+        if (r.ok && r.json.status === 1) {
+            input.dataset.saved = codigo;
+            input.closest('tr').classList.remove('reg-dirty');
+            showToast(r.json.description, 'success');
+        } else { showToast(r.json.description || 'No se pudo guardar.', 'error'); }
+        btn.disabled = false;
+    });
+    banList.addEventListener('input', (e) => {
+        const i = e.target.closest('.ban-input');
+        if (i) i.closest('tr').classList.toggle('reg-dirty', i.value.trim() !== (i.dataset.saved || '').trim());
+    });
+
+    document.getElementById('ban-advance').addEventListener('click', async function () {
+        const inputs = [...banList.querySelectorAll('.ban-input')];
+        if (!inputs.length || inputs.some(i => !i.value.trim())) {
+            showToast('Ingresa el código de banco de todos los vouchers de abono.', 'warning'); return;
+        }
+        if (inputs.some(i => i.value.trim() !== (i.dataset.saved || '').trim())) {
+            showToast('Hay códigos sin guardar. Guarda cada uno con el botón ✓ antes de continuar.', 'warning'); return;
+        }
+        if (this.disabled) return;
+        this.disabled = true; this.textContent = 'Avanzando...';
+        window.blockUI && window.blockUI('Procesando…');
+        const r = await post(`${BASE}/${OID}/abono-bankcode-advance`);
+        if (r.ok && r.json.status === 1) { showToast(r.json.description, 'success'); setTimeout(() => location = "{{ route('orders.view') }}", 900); return; }
+        const msg = r.json.description || (r.json.errors && Object.values(r.json.errors)[0]?.[0]) || r.json.message || 'No se pudo avanzar.';
+        showToast(msg, 'error');
+        window.unblockUI && window.unblockUI();
+        this.disabled = false; this.innerHTML = 'Guardar y pasar a Cierre →';
+    });
 @else
-    // ── Código de Banco a nivel de orden (UC2): guarda en order_details y avanza ──
+    // ── Código de Banco a nivel de orden (UC2): legacy, sin uso ──
     document.getElementById('btn-registro').addEventListener('click', () => { openM('modal-codebanco'); document.getElementById('cb-input').focus(); });
 
     document.getElementById('cb-save').addEventListener('click', async function () {
@@ -446,6 +644,52 @@
         showToast(msg, 'error');
         window.unblockUI && window.unblockUI();
         this.disabled = false; this.textContent = 'Sí, terminar flujo';
+    });
+@endif
+
+@if ($isConform)
+    // ── Conformidad final (UC2 general @55 → 92) ──
+    document.getElementById('btn-conform').addEventListener('click', () => openM('modal-conform'));
+    document.getElementById('conform-confirm').addEventListener('click', async function () {
+        if (this.disabled) return;                                  // evita dobles envíos
+        this.disabled = true; this.textContent = 'Procesando...';
+        window.blockUI && window.blockUI('Procesando…');            // bloquea toda la pantalla
+        const r = await post("{{ route('orders.approve', $o->id) }}");
+        if (r.ok && r.json.status === 1) { showToast(r.json.description, 'success'); setTimeout(() => location = "{{ route('orders.view') }}", 900); return; }
+        const msg = r.json.description || (r.json.errors && Object.values(r.json.errors)[0]?.[0]) || r.json.message || 'No se pudo dar conformidad.';
+        showToast(msg, 'error');
+        window.unblockUI && window.unblockUI();
+        this.disabled = false; this.textContent = 'Sí, dar conformidad';
+    });
+@endif
+
+@if ($canEditCodes)
+    // ── Editar códigos (registro por comprobante · banco por abono) antes de cerrar ──
+    document.getElementById('btn-editcodes').addEventListener('click', () => openM('modal-editcodes'));
+    const ecModal = document.getElementById('modal-editcodes');
+
+    async function ecSave(input, url, btn) {
+        const codigo = (input.value || '').trim();
+        if (!codigo) { showToast('Ingresa el código.', 'warning'); return; }
+        btn.disabled = true;
+        const r = await post(url, { codigo });
+        if (r.ok && r.json.status === 1) {
+            input.dataset.saved = codigo;
+            input.closest('tr').classList.remove('reg-dirty');
+            showToast(r.json.description, 'success');
+        } else { showToast(r.json.description || (r.json.errors && Object.values(r.json.errors)[0]?.[0]) || 'No se pudo guardar.', 'error'); }
+        btn.disabled = false;
+    }
+
+    ecModal.addEventListener('click', (e) => {
+        const reg = e.target.closest('.ec-reg-save');
+        if (reg) { const i = ecModal.querySelector(`.ec-reg[data-fid="${reg.dataset.fid}"]`); ecSave(i, `${BASE}/${OID}/edit-codigo-registro/${reg.dataset.fid}`, reg); return; }
+        const ban = e.target.closest('.ec-ban-save');
+        if (ban) { const i = ecModal.querySelector(`.ec-ban[data-qid="${ban.dataset.qid}"]`); ecSave(i, `${BASE}/${OID}/edit-codigo-banco/${ban.dataset.qid}`, ban); return; }
+    });
+    ecModal.addEventListener('input', (e) => {
+        const i = e.target.closest('.ec-reg, .ec-ban');
+        if (i) i.closest('tr').classList.toggle('reg-dirty', i.value.trim() !== (i.dataset.saved || '').trim());
     });
 @endif
 

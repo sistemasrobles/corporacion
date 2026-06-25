@@ -201,7 +201,7 @@
                 <span class="info-label" style="margin:16px 0 6px">Plan de cuotas</span>
                 <div class="table-responsive">
                     <table class="table">
-                        <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>N° Operación</th><th>Constancia</th><th>F. Subida</th><th>Subido por</th></tr></thead>
+                        <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>N° Operación</th><th>Constancia</th><th>F. Subida</th><th>Subido por</th><th>Cód. Banco</th></tr></thead>
                         <tbody>
                             @foreach ($cuotas as $q)
                                 <tr>
@@ -216,9 +216,10 @@
                                         @endif
                                     </td>
                                     <td class="cell-mono">{{ $q->operation_number ?: '—' }}</td>
-                                    <td>@if ($q->constancia)<a href="/storage/{{ $q->constancia }}" target="_blank" style="color:var(--primary)">Ver</a>@else <span style="color:var(--text-muted)">—</span>@endif</td>
+                                    <td>@if ($q->constancia)<a href="{{ \App\Support\FileStorage::url($q->constancia) }}" target="_blank" style="color:var(--primary)">Ver</a>@else <span style="color:var(--text-muted)">—</span>@endif</td>
                                     <td>{{ $q->constancia_date ? \Carbon\Carbon::parse($q->constancia_date)->format('d/m/Y H:i') : '—' }}</td>
                                     <td>{{ $constanciaUploaders[$q->id] ?? '—' }}</td>
+                                    <td class="cell-mono">{{ $q->codigo_banco ?: '—' }}</td>
                                 </tr>
                             @endforeach
                         </tbody>
@@ -235,11 +236,12 @@
             <strong style="font-size:13px;display:block;margin-bottom:8px">Comprobantes de pago</strong>
             <div class="table-responsive" style="margin-bottom:20px">
                 <table class="table">
-                    <thead><tr><th>Tipo</th><th>N° Documento</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Comentario</th><th>F. Subida</th><th>Subido por</th><th>Archivo</th></tr></thead>
+                    <thead><tr><th>Tipo</th><th>Serie</th><th>N° Documento</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Comentario</th><th>F. Subida</th><th>Subido por</th><th>Archivo</th></tr></thead>
                     <tbody>
                         @forelse ($comprobantes as $c)
                             <tr>
                                 <td>{{ $c['label'] }}</td>
+                                <td class="cell-mono">{{ $c['serie'] ?: '—' }}</td>
                                 <td class="cell-mono">{{ $c['document'] ?? '—' }}</td>
                                 <td style="text-align:right" class="cell-strong">{{ $c['amount'] !== null ? $cur . ' ' . number_format($c['amount'], 2) : '—' }}</td>
                                 <td>{{ $c['date'] ?? '—' }}</td>
@@ -247,7 +249,7 @@
                                 <td>{{ $c['coment'] ?: '—' }}</td>
                                 <td>{{ $c['subida'] ?? '—' }}</td>
                                 <td>{{ $c['uploader'] ?? '—' }}</td>
-                                <td>@if ($c['path'])<a href="/storage/{{ $c['path'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else — @endif</td>
+                                <td>@if ($c['path'])<a href="{{ \App\Support\FileStorage::url($c['path']) }}" target="_blank" style="color:var(--primary)">Ver</a>@else — @endif</td>
                             </tr>
                         @empty
                             <tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:14px">Sin comprobantes.</td></tr>
@@ -267,7 +269,7 @@
                                 <td>{{ $doc['comentario'] ?? '—' }}</td>
                                 <td>{{ $doc['subida'] ?? '—' }}</td>
                                 <td>{{ $doc['uploader'] ?? '—' }}</td>
-                                <td>@if ($doc['path'])<a href="/storage/{{ $doc['path'] }}" target="_blank" style="color:var(--primary)">Ver</a>@else — @endif</td>
+                                <td>@if ($doc['path'])<a href="{{ \App\Support\FileStorage::url($doc['path']) }}" target="_blank" style="color:var(--primary)">Ver</a>@else — @endif</td>
                             </tr>
                         @empty
                             <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:14px">Sin documentos.</td></tr>

@@ -116,7 +116,7 @@
                                     <td>{{ $p->bank_origin ?? '—' }}</td>
                                     <td class="cell-mono">{{ $p->transaction_code ?? '—' }}</td>
                                     <td style="text-align:right" class="cell-strong">{{ $cur . number_format($p->amount, 2) }}</td>
-                                    <td>@if($p->file_path)<a href="{{ \App\Support\RefundStorage::url($p->file_path) }}" target="_blank" class="link">ver</a>@else<span style="color:var(--text-muted)">—</span>@endif</td>
+                                    <td>@if($p->file_path)<a href="{{ \App\Support\FileStorage::url($p->file_path) }}" target="_blank" class="link">ver</a>@else<span style="color:var(--text-muted)">—</span>@endif</td>
                                 </tr>
                             @endforeach
                         </tbody>
@@ -175,7 +175,7 @@
                                     <td class="cell-mono">{{ $cf->document_number }}</td>
                                     <td>{{ $cf->issue_date?->format('d/m/Y') }}</td>
                                     <td style="text-align:right" class="cell-strong">{{ $cur . number_format($cf->amount, 2) }}</td>
-                                    <td>@if($cf->file_path)<a href="{{ \App\Support\RefundStorage::url($cf->file_path) }}" target="_blank" class="link">ver</a>@endif</td>
+                                    <td>@if($cf->file_path)<a href="{{ \App\Support\FileStorage::url($cf->file_path) }}" target="_blank" class="link">ver</a>@endif</td>
                                 </tr>
                             @endforeach
                         </tbody>

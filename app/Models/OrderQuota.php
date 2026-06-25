@@ -15,7 +15,8 @@ class OrderQuota extends Model
         'order_id', 'quota_number', 'amount', 'due_date', 'status',
         'monto_ok', 'rebote', 'observacion', 'constancia', 'deposit_date', 'constancia_date',
         'operation_number', 'source_company_id', 'source_bank',
-        'source_account_number', 'source_cci',
+        'source_account_number', 'source_cci', 'source_currency',
+        'codigo_banco', 'codigo_banco_date',
         'created_by', 'updated_by',
     ];
 
@@ -23,6 +24,7 @@ class OrderQuota extends Model
         'due_date' => 'date',
         'deposit_date' => 'date',
         'constancia_date' => 'datetime',
+        'codigo_banco_date' => 'datetime',
         'monto_ok' => 'boolean',
         'rebote' => 'boolean',
     ];
@@ -30,5 +32,11 @@ class OrderQuota extends Model
     public function order()
     {
         return $this->belongsTo(Order::class, 'order_id');
+    }
+
+    /** Empresa desde cuya cuenta salió el depósito (snapshot al depositar). */
+    public function sourceCompany()
+    {
+        return $this->belongsTo(Company::class, 'source_company_id');
     }
 }

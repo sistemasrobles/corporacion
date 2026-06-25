@@ -29,7 +29,7 @@
                         <td class="px-6 py-4 text-sm text-gray-900">{{ $file['emission_date'] ?? '-' }}</td>
                         <td class="px-6 py-4 text-sm text-blue-600">
                             @if($file['path'] ?? false)
-                                <a href="{{ asset('storage/' . $file['path']) }}" target="_blank" class="underline">
+                                <a href="{{ \App\Support\FileStorage::url($file['path']) }}" target="_blank" class="underline">
                                     Ver
                                 </a>
                             @else

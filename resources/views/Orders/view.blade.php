@@ -281,7 +281,7 @@
                 </p>
                 <div class="table-responsive">
                     <table class="table">
-                        <thead><tr><th>Tipo</th><th>N° Documento</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Archivo</th><th style="min-width:230px">Código de Registro</th></tr></thead>
+                        <thead><tr><th>Tipo</th><th>Serie</th><th>N° Documento</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Archivo</th><th style="min-width:230px">Código de Registro</th></tr></thead>
                         <tbody id="reg-list"></tbody>
                     </table>
                 </div>
@@ -304,23 +304,24 @@
                 <strong style="font-size:13px;display:block;margin-bottom:6px">Comprobantes de pago</strong>
                 <div class="table-responsive" style="margin-bottom:14px">
                     <table class="table">
-                        <thead><tr><th>Tipo</th><th>N° Documento</th><th>Monto</th><th>Emisión</th><th>Retención</th><th>Comentario</th><th>Archivo</th><th></th></tr></thead>
+                        <thead><tr><th>Tipo</th><th>Serie</th><th>N° Documento</th><th>Monto</th><th>Emisión</th><th>Retención</th><th>Comentario</th><th>Archivo</th><th></th></tr></thead>
                         <tbody id="docs-list"></tbody>
                     </table>
                 </div>
                 <fieldset class="sum-fs">
                     <legend>Agregar comprobante</legend>
+                    <div class="form-group" style="margin-bottom:8px">
+                        <label class="form-label">Tipo <span class="required">*</span></label>
+                        <select id="dc-type" class="form-control">
+                            <option value="">Seleccione...</option>
+                            @foreach ($voucherTypes as $val => $desc)
+                                <option value="{{ $val }}">{{ $desc }}</option>
+                            @endforeach
+                        </select>
+                    </div>
                     <div class="sum-grid" style="grid-template-columns:repeat(4,1fr)">
-                        <div class="form-group" style="margin-bottom:8px">
-                            <label class="form-label">Tipo <span class="required">*</span></label>
-                            <select id="dc-type" class="form-control">
-                                <option value="">Seleccione...</option>
-                                @foreach ($voucherTypes as $val => $desc)
-                                    <option value="{{ $val }}">{{ $desc }}</option>
-                                @endforeach
-                            </select>
-                        </div>
-                        <div class="form-group" style="margin-bottom:8px"><label class="form-label">N° Documento <span class="required">*</span></label><input type="text" id="dc-num" class="form-control" placeholder="F001-00012345"></div>
+                        <div class="form-group" style="margin-bottom:8px"><label class="form-label">Serie <span class="required">*</span></label><input type="text" id="dc-serie" class="form-control" maxlength="50" placeholder="F001"></div>
+                        <div class="form-group" style="margin-bottom:8px"><label class="form-label">N° Documento <span class="required">*</span></label><input type="text" id="dc-num" class="form-control" placeholder="00012345"></div>
                         <div class="form-group" style="margin-bottom:8px"><label class="form-label">Monto <span class="required">*</span></label><input type="number" id="dc-amount" step="0.01" min="0" class="form-control"></div>
                         <div class="form-group" style="margin-bottom:8px"><label class="form-label">Emisión <span class="required">*</span></label><input type="date" id="dc-date" class="form-control"></div>
                     </div>
@@ -330,12 +331,12 @@
                     </div>
                     <div class="form-group" style="margin-bottom:8px"><label class="form-label">Comentario</label><input type="text" id="dc-coment" class="form-control" maxlength="500" placeholder="Opcional"></div>
                     <div class="form-group" style="margin-bottom:8px">
-                        <label class="form-label">Archivo (PDF/imagen) <span class="required">*</span></label>
+                        <label class="form-label">Archivo (solo PDF) <span class="required">*</span></label>
                         <label class="dropzone dz-compact" id="dc-dz" for="dc-file">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 21V9M6 13l6-6 6 6"/><path d="M3 3h18"/></svg>
                             <div class="hint">Suelta el archivo o haz clic para buscar</div>
-                            <div class="sub">PDF, JPG, PNG · máx. 10 MB</div>
-                            <input type="file" id="dc-file" accept="application/pdf,image/*" style="display:none">
+                            <div class="sub">Solo PDF · máx. 3 MB</div>
+                            <input type="file" id="dc-file" accept="application/pdf" style="display:none">
                         </label>
                     </div>
                     <div style="text-align:right"><button type="button" id="docs-add" class="btn btn-primary">+ Agregar comprobante</button></div>
@@ -684,9 +685,12 @@ document.addEventListener('DOMContentLoaded', function () {
             ? `<span class="cell-mono">${escc(q.operacion)}</span>`
             : '<span style="color:var(--text-muted)">—</span>';
         const cfecha = (q) => q.const_fecha ? escc(q.const_fecha) : '<span style="color:var(--text-muted)">—</span>';
+        const cb = (q) => q.codigo_banco
+            ? `<span class="cell-mono">${escc(q.codigo_banco)}</span>`
+            : '<span style="color:var(--text-muted)">—</span>';
         const filas = cuotas.length
-            ? cuotas.map(q => `<tr><td class="cell-strong">Cuota ${q.numero}</td><td>${escc(q.fecha)}</td><td class="cell-strong" style="text-align:right">${escc(q.monto)}</td><td><span class="status ${abCls(q.estado_id)}">${escc(q.estado)}</span></td><td>${doc(q)}</td><td>${cfecha(q)}</td><td>${op(q)}</td></tr>`).join('')
-            : `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:10px">Sin cronograma</td></tr>`;
+            ? cuotas.map(q => `<tr><td class="cell-strong">Cuota ${q.numero}</td><td>${escc(q.fecha)}</td><td class="cell-strong" style="text-align:right">${escc(q.monto)}</td><td><span class="status ${abCls(q.estado_id)}">${escc(q.estado)}</span></td><td>${doc(q)}</td><td>${cfecha(q)}</td><td>${op(q)}</td><td>${cb(q)}</td></tr>`).join('')
+            : `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:10px">Sin cronograma</td></tr>`;
 
         // ── Proveedor (cuando hay datos) ──
         const p = d.proveedor;
@@ -724,6 +728,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (comps.length) {
             const rows = comps.map(x => `<tr>
                 <td>${escc(x.tipo)}</td>
+                <td class="cell-mono">${x.serie && x.serie !== '—' ? escc(x.serie) : '—'}</td>
                 <td class="cell-mono">${escc(x.numero)}</td>
                 <td style="text-align:right">${escc(x.monto)}</td>
                 <td>${escc(x.fecha)}</td>
@@ -734,7 +739,7 @@ document.addEventListener('DOMContentLoaded', function () {
             compsFs = `
                 <fieldset class="sum-fs"><legend>Comprobantes de pago</legend>
                     <div class="table-responsive"><table class="table">
-                        <thead><tr><th>Tipo</th><th>N° Doc</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Comentario</th><th>Archivo</th></tr></thead>
+                        <thead><tr><th>Tipo</th><th>Serie</th><th>N° Doc</th><th style="text-align:right">Monto</th><th>Emisión</th><th>Cód. Registro</th><th>Comentario</th><th>Archivo</th></tr></thead>
                         <tbody>${rows}</tbody>
                     </table></div>
                 </fieldset>`;
@@ -776,7 +781,7 @@ document.addEventListener('DOMContentLoaded', function () {
             </fieldset>
             <fieldset class="sum-fs"><legend>Cronograma de pagos</legend>
                 <div class="table-responsive"><table class="table">
-                    <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>Documento</th><th>F. Subida</th><th>N° Operación</th></tr></thead>
+                    <thead><tr><th>Cuota</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado abono</th><th>Documento</th><th>F. Subida</th><th>N° Operación</th><th>Cód. Banco</th></tr></thead>
                     <tbody>${filas}</tbody>
                 </table></div>
             </fieldset>
@@ -826,7 +831,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (dc) {
             currentId = dc.dataset.id;
             document.getElementById('docs-code').textContent = dc.dataset.code;
-            ['dc-type','dc-num','dc-amount','dc-date','dc-coment','dc-file','an-type','an-coment','an-file'].forEach(id => document.getElementById(id).value = '');
+            ['dc-type','dc-serie','dc-num','dc-amount','dc-date','dc-coment','dc-file','an-type','an-coment','an-file'].forEach(id => document.getElementById(id).value = '');
             document.getElementById('dc-retencion').checked = false;
             document.getElementById('dc-retencion-wrap').style.display = 'none';
             resetDz('dc-dz'); resetDz('an-dz');
@@ -974,10 +979,11 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
     function renderDocs(list) {
-        if (!list.length) { docsList.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">Sin comprobantes aún.</td></tr>`; return; }
+        if (!list.length) { docsList.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">Sin comprobantes aún.</td></tr>`; return; }
         docsList.innerHTML = list.map(d => `
             <tr>
                 <td>${escd(d.type_label)}</td>
+                <td class="cell-mono">${d.serie ? escd(d.serie) : '—'}</td>
                 <td class="cell-mono">${escd(d.document_number)}</td>
                 <td class="cell-strong">${escd(d.amount)}</td>
                 <td>${escd(d.emission_date)}</td>
@@ -991,21 +997,24 @@ document.addEventListener('DOMContentLoaded', function () {
     // Agregar comprobante
     document.getElementById('docs-add').addEventListener('click', async function () {
         const type = document.getElementById('dc-type').value;
+        const serie = document.getElementById('dc-serie').value.trim();
         const num  = document.getElementById('dc-num').value.trim();
         const amt  = document.getElementById('dc-amount').value;
         const date = document.getElementById('dc-date').value;
         const coment = document.getElementById('dc-coment').value.trim();
         const file = document.getElementById('dc-file').files[0];
-        if (!type || !num || !amt || !date || !file) { showToast('Completa todos los campos del comprobante.', 'warning'); return; }
+        if (!type || !serie || !num || !amt || !date || !file) { showToast('Completa todos los campos del comprobante (incluida la serie).', 'warning'); return; }
+        if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) { showToast('El comprobante de pago debe ser un archivo PDF.', 'warning'); return; }
+        if (file.size > 3 * 1024 * 1024) { showToast('El comprobante no puede superar los 3 MB.', 'warning'); return; }
         this.disabled = true; this.textContent = 'Subiendo...';
         const fd = new FormData();
-        fd.append('type_file', type); fd.append('document_number', num); fd.append('amount', amt);
+        fd.append('type_file', type); fd.append('serie', serie); fd.append('document_number', num); fd.append('amount', amt);
         fd.append('emission_date', date); fd.append('comentario', coment); fd.append('file', file);
         if (document.getElementById('dc-retencion').checked) fd.append('has_retention', '1');
         const r = await post(`{{ url('orders') }}/${currentId}/comprobante`, fd);
         if (r.ok && r.json.status === 1) {
             showToast(r.json.description, 'success');
-            ['dc-type','dc-num','dc-amount','dc-date','dc-coment','dc-file'].forEach(id => document.getElementById(id).value = '');
+            ['dc-type','dc-serie','dc-num','dc-amount','dc-date','dc-coment','dc-file'].forEach(id => document.getElementById(id).value = '');
             document.getElementById('dc-retencion').checked = false;
             document.getElementById('dc-retencion-wrap').style.display = 'none';
             resetDz('dc-dz');
@@ -1092,10 +1101,11 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
     function renderRegistro(list) {
-        if (!list.length) { regList.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">No hay documentos de pago.</td></tr>`; return; }
+        if (!list.length) { regList.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:14px;font-style:italic">No hay documentos de pago.</td></tr>`; return; }
         regList.innerHTML = list.map(d => `
             <tr data-fid="${d.id}">
                 <td>${escr(d.type_label)}</td>
+                <td class="cell-mono">${d.serie ? escr(d.serie) : '—'}</td>
                 <td class="cell-mono">${escr(d.document_number)}</td>
                 <td class="cell-strong" style="text-align:right">${escr(d.amount)}</td>
                 <td>${escr(d.emission_date)}</td>

@@ -12,4 +12,9 @@ class Company extends Model
     {
         return $this->hasMany(Order::class, 'company_id');
     }
+
+    public function accounts()
+    {
+        return $this->hasMany(CompanyAccount::class, 'company_id');
+    }
 }

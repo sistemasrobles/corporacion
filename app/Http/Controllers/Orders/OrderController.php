@@ -10,6 +10,7 @@ use App\Models\PaymentSchedule;
 use App\Models\Status;
 use App\Models\Company;
 use App\Models\Sede;
+use App\Models\CompanyAccount;
 use App\Models\Master;
 use App\Models\Category;
 use App\Models\Supplier;
@@ -25,6 +26,7 @@ use App\Models\Type;
 use App\Models\TypeUser;
 use App\Models\UserType;
 use App\Models\User;
+use App\Support\FileStorage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -167,7 +169,7 @@ class OrderController extends Controller
                 OrderFile::create([
                     'type_file'  => $rules['cotizacion'] ?? null,
                     'order_id'   => $order->id,
-                    'path'       => $file->store('orders/docs', 'public'),
+                    'path'       => FileStorage::put($file, 'orders/docs'),
                     'principal'  => 0,
                     'created_by' => $user->id, 'updated_by' => $user->id,
                 ]);
@@ -271,6 +273,13 @@ class OrderController extends Controller
      */
     private function validarReglasOrden(bool $urgente, $conditionId, $expirationDate, $areaId, array $compTypes, array $anexoTypes, $planCuotasJson = null, bool $requirePlan = true, $formatId = null): void
     {
+        // Programación URGENTE: la condición de pago solo puede ser Al Contado (no fraccionado).
+        if ($urgente && $this->esFraccionado($conditionId)) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'condition_payment' => 'En programación urgente la condición de pago debe ser Al Contado.',
+            ]);
+        }
+
         if ($this->esFraccionado($conditionId)) {
             // Fraccionado: el plan de cuotas es obligatorio (se omite en edición restringida)
             $plan = json_decode($planCuotasJson ?? '[]', true) ?: [];
@@ -399,6 +408,7 @@ class OrderController extends Controller
         $comprobantes = $order->files->filter($isComprobante)->map(fn ($f) => [
             'label'    => $voucherLabels[$f->type_file] ?? $f->type_file,
             'document' => $f->document_number,
+            'serie'    => $f->serie,
             'amount'   => $f->amount,
             'date'     => $f->emission_date,
             'cod_reg'  => $f->registration_code,
@@ -521,11 +531,12 @@ class OrderController extends Controller
                 'type_file'       => $f->type_file,
                 'type_file_label' => $voucherLabels[$f->type_file] ?? $f->type_file,
                 'document_number' => $f->document_number,
+                'serie'           => $f->serie,
                 'amount'          => $f->amount,
                 'emission_date'   => $f->emission_date,
                 'has_retention'   => $f->has_retention,
                 'comentario'      => $f->comentario,
-                'path'            => $f->path,
+                'path'            => $f->path ? FileStorage::url($f->path) : null,
             ])->values(),
 
             'documentos' => $order->files->reject($isComprobante)->map(fn ($f) => [
@@ -533,7 +544,7 @@ class OrderController extends Controller
                 'type'       => $f->type_file,
                 'type_label' => $attachLabels[$f->type_file] ?? $f->type_file,
                 'comentario' => $f->comentario,
-                'path'       => $f->path,
+                'path'       => $f->path ? FileStorage::url($f->path) : null,
             ])->values(),
 
             'planCuotas' => $order->quotas->sortBy('quota_number')->map(fn ($q) => [
@@ -546,7 +557,7 @@ class OrderController extends Controller
         $acts           = $this->orderActions($order);
         $restricted     = $this->isRestrictedEdit($order);
         $scheduleLocked = $this->isScheduleLocked($order);   // programación bloqueada (post-aprobación GA)
-        $obsTypes  = Master::where('main', 20)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
+        $obsTypes  = Master::where('main', 52)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
         $orderMeta = [
             'creador'     => User::find($order->created_by)?->name ?? '—',
             'fecha'       => $order->created_at?->format('d/m/Y'),
@@ -647,9 +658,14 @@ class OrderController extends Controller
             'observation'         => ['nullable'],
             'keep_files'          => ['nullable', 'array'],
             'comprobantes'        => ['nullable', 'array'],
+            'comprobantes.*.serie' => ['required', 'string', 'max:50'],                // serie del comprobante (obligatoria)
+            'comprobantes.*.path' => ['nullable', 'file', 'mimes:pdf', 'max:3072'],   // comprobante de pago: solo PDF, máx 3 MB
             'documentos'          => ['nullable', 'array'],
         ], [
-            'supplier_account_id.required' => 'Selecciona la cuenta bancaria del proveedor.',
+            'supplier_account_id.required'    => 'Selecciona la cuenta bancaria del proveedor.',
+            'comprobantes.*.serie.required'   => 'Indica la serie de cada comprobante de pago.',
+            'comprobantes.*.path.mimes'       => 'El comprobante de pago debe ser un archivo PDF.',
+            'comprobantes.*.path.max'         => 'El comprobante de pago no puede superar los 3 MB.',
         ]);
 
         // Regla Recibo x Honorario sobre el conjunto final de archivos (conservados + nuevos)
@@ -704,6 +720,12 @@ class OrderController extends Controller
             if (!$restricted) {
                 $this->validarSumaCuotas($data['plan_cuotas'] ?? null, $amtNeto);
             }
+
+            // El GA puede cambiar general↔urgente al editar: reflejar el nuevo cronograma en el
+            // modelo ANTES de resolver el avance, para que el estado/destino correspondan a la
+            // programación elegida (urgente: 2→3 APROBADO/GF · general: 2→100 ACEPTADO/UC1).
+            $order->payment_schedule_id = $data['payment_schedule_id'];
+            $order->setRelation('paymentSchedule', PaymentSchedule::find($data['payment_schedule_id']));
 
             // Avance de flujo
             $currentStatus = (int) $order->status;
@@ -785,12 +807,13 @@ class OrderController extends Controller
             foreach ($request->input('comprobantes', []) as $i => $cb) {
                 $path = null;
                 if ($file = $request->file("comprobantes.$i.path")) {
-                    $path = $file->store('orders/vouchers', 'public');
+                    $path = FileStorage::put($file, 'orders/vouchers');
                 }
                 $esRecibo = $rules['recibo'] && (string) ($cb['type_file'] ?? '') === (string) $rules['recibo'];
                 OrderFile::create([
                     'type_file'       => $cb['type_file'] ?? null,
                     'document_number' => $cb['document_number'] ?? null,
+                    'serie'           => $cb['serie'] ?? null,
                     'amount'          => $cb['amount'] ?? null,
                     'emission_date'   => $cb['emission_date'] ?? null,
                     'has_retention'   => $esRecibo ? !empty($cb['has_retention']) : null,
@@ -808,7 +831,7 @@ class OrderController extends Controller
                 OrderFile::create([
                     'type_file'  => $dn['type'] ?? null,
                     'order_id'   => $order->id,
-                    'path'       => $file->store('orders/docs', 'public'),
+                    'path'       => FileStorage::put($file, 'orders/docs'),
                     'comentario' => $dn['comentario'] ?? null,
                     'principal'  => 0,
                     'created_by' => $user->id, 'updated_by' => $user->id,
@@ -835,6 +858,19 @@ class OrderController extends Controller
     {
         $name = $order->paymentSchedule?->name ?? '';
         return stripos($name, 'urgente') !== false;
+    }
+
+    /**
+     * ¿El usuario puede EDITAR los códigos (registro y banco) ya registrados?
+     * Quien cierra el flujo, antes de cerrar (estado 92): UC3 urgente · UC4 general.
+     */
+    private function canEditCodes(Order $order): bool
+    {
+        if ((int) $order->status !== 92) {
+            return false;
+        }
+        $role = auth()->user()->user_type;
+        return $this->isUrgente($order) ? $role === 'UC3' : $role === 'UC4';
     }
 
     /** ¿Todos los abonos de la orden están en [202] (pagados con constancia)? */
@@ -931,12 +967,17 @@ class OrderController extends Controller
             'plan_cuotas'         => ['nullable'],
             'observation'         => ['nullable'],
             'comprobantes'        => ['nullable', 'array'],
+            'comprobantes.*.serie' => ['required', 'string', 'max:50'],                // serie del comprobante (obligatoria)
+            'comprobantes.*.path' => ['nullable', 'file', 'mimes:pdf', 'max:3072'],   // comprobante de pago: solo PDF, máx 3 MB
             'documentos'          => ['nullable', 'array'],
             // Gestión: obligatoria para el GA (elige a quién asignar); opcional para el resto.
             'type_id'             => [$user->user_type === 'GA' ? 'required' : 'nullable', 'exists:types,id'],
         ], [
             'type_id.required'    => 'Selecciona el Tipo de Gestión (define el responsable de la orden).',
             'supplier_account_id.required' => 'Selecciona la cuenta bancaria del proveedor.',
+            'comprobantes.*.serie.required' => 'Indica la serie de cada comprobante de pago.',
+            'comprobantes.*.path.mimes' => 'El comprobante de pago debe ser un archivo PDF.',
+            'comprobantes.*.path.max'   => 'El comprobante de pago no puede superar los 3 MB.',
             'expiration_date.after_or_equal' => 'La fecha de vencimiento no puede ser anterior a hoy.',
             'justification.max'              => 'La justificación no puede superar los 500 caracteres.',
         ]);
@@ -1088,12 +1129,13 @@ class OrderController extends Controller
             foreach ($request->input('comprobantes', []) as $i => $cb) {
                 $path = null;
                 if ($file = $request->file("comprobantes.$i.path")) {
-                    $path = $file->store('orders/vouchers', 'public');
+                    $path = FileStorage::put($file, 'orders/vouchers');
                 }
                 $esRecibo = $rules['recibo'] && (string) ($cb['type_file'] ?? '') === (string) $rules['recibo'];
                 OrderFile::create([
                     'type_file'       => $cb['type_file'] ?? null,
                     'document_number' => $cb['document_number'] ?? null,
+                    'serie'           => $cb['serie'] ?? null,
                     'amount'          => $cb['amount'] ?? null,
                     'emission_date'   => $cb['emission_date'] ?? null,
                     'has_retention'   => $esRecibo ? !empty($cb['has_retention']) : null,
@@ -1113,7 +1155,7 @@ class OrderController extends Controller
                 OrderFile::create([
                     'type_file'  => $dn['type'] ?? null,
                     'order_id'   => $order->id,
-                    'path'       => $file->store('orders/docs', 'public'),
+                    'path'       => FileStorage::put($file, 'orders/docs'),
                     'comentario' => $dn['comentario'] ?? null,
                     'principal'  => 0,
                     'created_by' => $user->id, 'updated_by' => $user->id,
@@ -1357,6 +1399,12 @@ class OrderController extends Controller
     {
         $user = auth()->user();
 
+        // El AF ya no tiene paso de flujo en Mis Órdenes (su conformidad urgente se eliminó):
+        // su bandeja quedaría vacía, así que lo llevamos a Órdenes Históricas (consulta).
+        if ($user->user_type === 'AF') {
+            return redirect()->route('orders.history');
+        }
+
         // Datos para los dropdowns de filtros
         $formats   = Format::orderBy('description')->get();
         $areas     = Area::orderBy('description')->get();
@@ -1372,7 +1420,7 @@ class OrderController extends Controller
         $actions = fn (Order $o) => $this->orderActions($o);
 
         // Tipos de observación (modal observar) y de comprobante (modal cargar documentos)
-        $obsTypes     = Master::where('main', 20)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
+        $obsTypes     = Master::where('main', 52)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
         $voucherTypes = Master::where('main', 15)->whereNotNull('description')->orderBy('description')->pluck('description', 'value');
         $attachTypes  = Master::where('main', 18)->whereNotNull('description')->orderBy('description')->pluck('description', 'value');
         $docRules     = $this->docRules();
@@ -1492,17 +1540,18 @@ class OrderController extends Controller
 
         if ($urgente) {
             if ($role === 'GF'  && $status === 3)   return $confirm('Aprobar', 102, 'Aprobada — pasa a Cronograma de Pago');
-            // AA sustenta solo cuando TODOS los abonos están pagados ([202])
-            if ($role === 'AA'  && $status === 102 && $this->abonosCompletos($o)) return $confirm('Sustentar', 8, 'Orden sustentada — enviada a Finanzas (AF)');
-            if ($role === 'AF'  && $status === 8)   return $confirm('Conforme', 9, 'Conforme — enviada a Contabilidad (UC1)');
+            // AA sustenta solo cuando TODOS los abonos están pagados ([202]); va directo a Contabilidad (UC1).
+            // El paso de conformidad del AF (estado SUSTENTADO=8) se eliminó del flujo.
+            if ($role === 'AA'  && $status === 102 && $this->abonosCompletos($o)) return $confirm('Sustentar', 9, 'Orden sustentada — enviada a Contabilidad (UC1)');
             if ($role === 'UC1' && $status === 9)   return $code('codigo_registro', 'Código de Registro', 91, 'Orden pasa a Código de Banco', 'perdoc');
-            if ($role === 'UC2' && $status === 91)  return $code('codigo_banco', 'Código de Banco', 92, 'Código de banco guardado');
+            if ($role === 'UC2' && $status === 91)  return $code('codigo_banco', 'Código de Banco', 92, 'Código de banco guardado', 'perabono');
             if ($role === 'UC3' && $status === 92)  return $confirm('Cerrar', 10, 'Orden cerrada');
         } else {
             if ($role === 'UC1' && $status === 100) return $code('codigo_registro', 'Código de Registro', 91, 'Orden pasa a Código de Banco', 'perdoc');
             if ($role === 'UC3' && $status === 91)  return $confirm('Aprobar', 101, 'Aprobada — enviada a UC5');
             if ($role === 'UC5' && $status === 101) return $confirm('Confirmar', 102, 'Confirmada — pasa a Cronograma de Pago');
-            if ($role === 'UC2' && $status === 55)  return $code('codigo_banco', 'Código de Banco', 92, 'Código de banco guardado');
+            // General: el código de banco se registra por abono (Cuentas por Pagar). Aquí UC2 solo da la conformidad final.
+            if ($role === 'UC2' && $status === 55)  return $confirm('Dar conformidad', 92, 'Conformidad registrada — cierre contable');
             if ($role === 'UC4' && $status === 92)  return $confirm('Cerrar', 10, 'Orden cerrada');
         }
         return null;
@@ -1518,7 +1567,6 @@ class OrderController extends Controller
         if ($role === 'GA' && $status === 2) return 'AA';
         if ($urgente) {
             if ($role === 'GF'  && $status === 3)  return 'GA';   // urgente: GF observa → GA
-            if ($role === 'AF'  && $status === 8)  return 'AA';
             if ($role === 'UC1' && $status === 9)  return 'AA';
             if ($role === 'UC2' && $status === 91) return 'AA';
             if ($role === 'UC3' && $status === 92) return 'AA';
@@ -1544,10 +1592,15 @@ class OrderController extends Controller
             'approveLabel' => ($t && $t['kind'] === 'confirm') ? $t['label'] : 'Aprobar',
             // Cierre del flujo (UC3/UC4 @92 → 10): se gestiona desde la Vista Contable
             'close'        => $t && $t['kind'] === 'confirm' && ($t['next'] ?? null) === 10,
+            // Conformidad final (UC2 general @55 → 92): cierre contable tras registrar los códigos por abono
+            'conform'      => $t && $t['kind'] === 'confirm' && ($t['next'] ?? null) === 92 && $status === 55,
+            'conformLabel' => ($t && $t['kind'] === 'confirm' && ($t['next'] ?? null) === 92) ? $t['label'] : 'Dar conformidad',
             'code'         => $t && $t['kind'] === 'code',
             'codeLabel'    => ($t && $t['kind'] === 'code') ? $t['codeLabel'] : 'Código',
             'codeMode'     => ($t && $t['kind'] === 'code') ? ($t['mode'] ?? 'single') : null,
+            'codeField'    => ($t && $t['kind'] === 'code') ? ($t['field'] ?? null) : null,   // codigo_registro | codigo_banco
             'observe'      => $this->observeTarget($o) !== null,
+            'editCodes'    => $this->canEditCodes($o),   // UC3 urgente / UC4 general @92: corrige códigos antes de cerrar
             'reject'       => $role === 'GA' && $status === 2,
             // AA carga comprobantes en paralelo mientras la orden está en Cronograma de Pago (urgente)
             'docs'         => $role === 'AA' && $status === 102 && $this->isUrgente($o),
@@ -1566,9 +1619,9 @@ class OrderController extends Controller
         }
         $current = (int) $order->status;
 
-        // Al sustentar (AA: 102 → 8): debe haber al menos un comprobante de pago y cumplirse
-        // los anexos del Recibo x Honorario.
-        if ($current === 102 && (int) $t['next'] === 8) {
+        // Al sustentar (AA: 102 → 9, directo a UC1): debe haber al menos un comprobante de pago y
+        // cumplirse los anexos del Recibo x Honorario.
+        if ($current === 102 && (int) $t['next'] === 9) {
             $order->loadMissing('files');
             $tieneComprobante = $order->files->contains(fn ($f) => $f->document_number || $f->amount);
             if (!$tieneComprobante) {
@@ -1579,11 +1632,27 @@ class OrderController extends Controller
             $this->validarReciboHonorarioOrden($order);
         }
 
-        DB::transaction(function () use ($order, $user, $current, $t) {
+        // Conformidad final (UC2 general: 55 → 92): exige que TODOS los abonos tengan código de banco
+        // registrado (no nulo ni vacío). El código se registra desde Cuentas por Pagar, por abono.
+        $coment = '';
+        if ($current === 55 && (int) $t['next'] === 92) {
+            $sinCodigo = $order->quotas()
+                ->where(fn ($q) => $q->whereNull('codigo_banco')->orWhere('codigo_banco', ''))
+                ->count();
+            if ($sinCodigo > 0) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'conformidad' => "No se puede dar conformidad: faltan {$sinCodigo} abono(s) por registrar su código de banco en Cuentas por Pagar.",
+                ]);
+            }
+            // Detalle para la línea de tiempo: los códigos de banco reales, separados por comas.
+            $coment = 'Código de Banco: ' . $order->quotas()->orderBy('quota_number')->pluck('codigo_banco')->filter()->implode(', ');
+        }
+
+        DB::transaction(function () use ($order, $user, $current, $t, $coment) {
             OrderHistory::create([
                 'from_user' => $user->user_type, 'to_user' => $t['to'],
                 'from_status' => $current, 'to_status' => $t['next'],
-                'coment' => '', 'order_id' => $order->id,
+                'coment' => $coment, 'order_id' => $order->id,
                 'created_by' => $user->id, 'updated_by' => $user->id,
             ]);
             $order->update(['status' => $t['next'], 'updated_by' => $user->id]);
@@ -1640,7 +1709,7 @@ class OrderController extends Controller
             'obs_comment' => ['required', 'string'],
         ]);
 
-        $desc    = Master::where('main', 20)->where('value', $data['obs_type'])->value('description');
+        $desc    = Master::where('main', 52)->where('value', $data['obs_type'])->value('description');
         $comment = '[' . $desc . '] ' . $data['obs_comment'];
         $current = (int) $order->status;
 
@@ -1651,7 +1720,7 @@ class OrderController extends Controller
                 'coment' => $comment, 'order_id' => $order->id,
                 'created_by' => $user->id, 'updated_by' => $user->id,
             ]);
-            $order->update(['status' => 5, 'motive_observation' => $comment, 'updated_by' => $user->id]);
+            $order->update(['status' => 5, 'updated_by' => $user->id]);
         });
 
         return response()->json($this->setRpta(1, 'Observación registrada', ['redirect' => route('orders.view')]));
@@ -1677,7 +1746,7 @@ class OrderController extends Controller
                 'coment' => $data['reject_reason'], 'order_id' => $order->id,
                 'created_by' => $user->id, 'updated_by' => $user->id,
             ]);
-            $order->update(['status' => 4, 'motive_cancelation' => $data['reject_reason'], 'updated_by' => $user->id]);
+            $order->update(['status' => 4, 'updated_by' => $user->id]);
         });
 
         return response()->json($this->setRpta(1, 'Orden rechazada', [
@@ -1826,16 +1895,17 @@ class OrderController extends Controller
 
         $rows = $this->collectPayableRows($user);
 
-        // Cuentas de origen disponibles (datos bancarios de las empresas) para el depósito
-        $companies = Company::orderBy('name')
-            ->get(['id', 'name', 'source_bank', 'source_account_number', 'source_cci']);
+        // Cuentas de origen disponibles (cuentas bancarias de las empresas) para el depósito
+        $companyAccounts = CompanyAccount::with('company:id,name')
+            ->orderBy('company_id')->orderByDesc('is_primary')->get();
         // Opciones de filtros (de sus tablas fuente).
+        $companies  = Company::orderBy('name')->get(['id', 'name']);                   // filtro por empresa
         $schedules  = PaymentSchedule::orderBy('name')->get();
         $tipos      = Format::orderBy('description')->pluck('description', 'abrev');   // abrev OC/OS = orders.format_id
         $currencies = Master::where('main', 1)->whereNotNull('value')                 // value = order_details.currency (PEN/USD)
             ->orderBy('description')->pluck('description', 'value');
 
-        return view('Orders.payable', compact('rows', 'companies', 'schedules', 'tipos', 'currencies'));
+        return view('Orders.payable', compact('rows', 'companyAccounts', 'companies', 'schedules', 'tipos', 'currencies'));
     }
 
     /** Filas frescas de Cuentas por Pagar (botón Recargar): re-consulta la BD y devuelve el partial. */
@@ -1858,18 +1928,22 @@ class OrderController extends Controller
         $role = $user->user_type;
 
         // Roles del ciclo de pago: GF/AF operan; AA observa sus abonos (urgente); UC2 (general).
-        $query = Order::with(['quotas', 'company', 'paymentSchedule', 'detail'])
+        $query = Order::with(['quotas.sourceCompany:id,name', 'company', 'paymentSchedule', 'detail'])
             ->whereIn('status', [102, 55]);
 
         if ($role === 'AA') {
             $query->where('user_responsible', $user->id)->where('status', 102);   // urgente: verifica/observa las suyas
-        } elseif ($role === 'UC2') {
-            $query->where('status', 55);                                           // general: revisa al completarse
         }
+        // UC2 (general): ve la orden durante todo el cronograma [102] y al completarse [55],
+        //   para registrar el código de banco por abono apenas se sube su constancia.
         // GF / AF ven todos los abonos en proceso.
 
         $rows = [];
         foreach ($query->latest()->get() as $o) {
+            // UC2 solo programación general (status 102 también trae urgentes, que no le tocan).
+            if ($role === 'UC2' && $this->isUrgente($o)) {
+                continue;
+            }
             foreach ($o->quotas->sortBy('quota_number') as $ab) {
                 $rows[] = ['order' => $o, 'abono' => $ab, 'acts' => $this->abonoActions($ab, $o)];
             }
@@ -1921,7 +1995,7 @@ class OrderController extends Controller
     /** Abonos ya pagados (constancia adjuntada, 202), ordenados por fecha de depósito desc. */
     private function collectPaymentsRows()
     {
-        return OrderQuota::with(['order.company', 'order.paymentSchedule', 'order.detail'])
+        return OrderQuota::with(['order.company', 'order.paymentSchedule', 'order.detail', 'sourceCompany:id,name'])
             ->where('status', 202)
             ->get()
             ->sortByDesc(fn ($q) => $q->deposit_date ?? $q->updated_at)
@@ -1940,6 +2014,8 @@ class OrderController extends Controller
             'constancia' => $st === 201 && ($role === 'AF' || $role === 'GF'),   // GF sube constancia en urgente y general
             'verify'     => false,   // "Conforme" deshabilitado: no condiciona el avance (era solo informativo)
             'observe'    => $st === 202 && (($urg && $role === 'AA') || (!$urg && $role === 'UC2')),
+            // General: UC2 registra el código de banco por abono apenas tiene constancia ([202]).
+            'bankcode'   => !$urg && $role === 'UC2' && $st === 202 && empty($q->codigo_banco),
         ];
     }
 
@@ -1952,19 +2028,19 @@ class OrderController extends Controller
             abort(403);
         }
 
-        $data    = $request->validate(['source_company_id' => ['required', 'exists:companies,id']]);
-        $company = Company::findOrFail($data['source_company_id']);
-        if (!$company->source_account_number) {
-            return response()->json($this->setRpta(0, 'La empresa seleccionada no tiene cuenta bancaria registrada.'));
-        }
+        $data    = $request->validate(['source_account_id' => ['required', 'exists:company_accounts,id']], [
+            'source_account_id.required' => 'Selecciona la cuenta de origen.',
+        ]);
+        $account = CompanyAccount::findOrFail($data['source_account_id']);
 
         $q->update([
             'status'                => 201,
             'deposit_date'          => now()->toDateString(),
-            'source_company_id'     => $company->id,
-            'source_bank'           => $company->source_bank,
-            'source_account_number' => $company->source_account_number,
-            'source_cci'            => $company->source_cci,
+            'source_company_id'     => $account->company_id,
+            'source_bank'           => $account->bank,
+            'source_account_number' => $account->account_number,
+            'source_cci'            => $account->cci,
+            'source_currency'       => $account->currency,
             'updated_by'            => $user->id,
         ]);
 
@@ -1988,7 +2064,7 @@ class OrderController extends Controller
             'constancia'       => ['required', 'file', 'max:10240'],
             'operation_number' => ['required', 'string', 'max:100'],
         ]);
-        $path = $request->file('constancia')->store('orders/constancias', 'public');
+        $path = FileStorage::put($request->file('constancia'), 'orders/constancias');
 
         DB::transaction(function () use ($q, $user, $path, $o, $data) {
             $q->update([
@@ -2031,7 +2107,154 @@ class OrderController extends Controller
         return response()->json($this->setRpta(1, 'Abono verificado conforme', ['redirect' => route('orders.payable')]));
     }
 
-    /** Observa un abono (regresa a 201). AA urgente · UC2 general. */
+    /**
+     * UC2 registra el código de banco de un ABONO (voucher de abono → orders_quotas.codigo_banco).
+     *  · GENERAL: por cuota en Cuentas por Pagar, apenas tiene constancia ([202]).
+     *  · URGENTE: desde el modal de Vista Contable, en el paso de Código de Banco (orden @91).
+     */
+    public function abonoBankCode(Request $request, $quota)
+    {
+        $q    = OrderQuota::with('order.paymentSchedule')->findOrFail($quota);
+        $user = auth()->user();
+        $o    = $q->order;
+        $urg  = $this->isUrgente($o);
+
+        $general = !$urg && (int) $q->status === 202;     // Cuentas por Pagar
+        $urgente = $urg && (int) $o->status === 91;        // Vista Contable (paso código de banco)
+        if (!($user->user_type === 'UC2' && ($general || $urgente))) {
+            abort(403);
+        }
+
+        $data = $request->validate(['codigo_banco' => ['required', 'string', 'max:100']], [
+            'codigo_banco.required' => 'Ingresa el código de banco.',
+        ]);
+
+        $q->update([
+            'codigo_banco'      => $data['codigo_banco'],
+            'codigo_banco_date' => now(),
+            'updated_by'        => $user->id,
+        ]);
+
+        return response()->json($this->setRpta(1, 'Código de banco registrado', [
+            'id'       => $q->id,
+            'code'     => $q->codigo_banco,
+            'redirect' => $general ? route('orders.payable') : null,   // urgente: el modal no recarga
+        ]));
+    }
+
+    /**
+     * URGENTE: UC2 confirma que todos los vouchers de abono tienen código de banco y avanza
+     * la orden 91 → 92 (Cierre). Espeja a advanceRegistro pero sobre los abonos (orders_quotas).
+     */
+    public function advanceAbonoBankCode($order)
+    {
+        $o    = Order::with(['paymentSchedule', 'quotas'])->findOrFail($order);
+        $user = auth()->user();
+
+        $t = $this->advanceTransition($o);
+        if (!$t || ($t['mode'] ?? null) !== 'perabono') {
+            abort(403);
+        }
+
+        if ($o->quotas->isEmpty() || $o->quotas->contains(fn ($q) => blank($q->codigo_banco))) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'codigo' => 'Asigna y guarda el código de banco de todos los vouchers de abono antes de continuar.',
+            ]);
+        }
+
+        $current = (int) $o->status;
+        // Detalle para la línea de tiempo: los códigos de banco reales, separados por comas.
+        $codigos = $o->quotas->sortBy('quota_number')->pluck('codigo_banco')->filter()->implode(', ');
+
+        DB::transaction(function () use ($o, $user, $current, $t, $codigos) {
+            OrderHistory::create([
+                'from_user' => $user->user_type, 'to_user' => $t['to'],
+                'from_status' => $current, 'to_status' => $t['next'],
+                'coment' => 'Código de Banco: ' . $codigos, 'order_id' => $o->id,
+                'created_by' => $user->id, 'updated_by' => $user->id,
+            ]);
+            $o->update(['status' => $t['next'], 'updated_by' => $user->id]);
+        });
+
+        return response()->json($this->setRpta(1, $t['msg'], ['redirect' => route('orders.view')]));
+    }
+
+    /**
+     * Quien cierra el flujo (UC3 urgente / UC4 general) corrige el CÓDIGO DE REGISTRO de un
+     * comprobante antes de cerrar (estado 92). Queda registrado en orders_events.
+     */
+    public function editRegistrationCode(Request $request, $order, $file)
+    {
+        $o    = Order::with('paymentSchedule')->findOrFail($order);
+        $user = auth()->user();
+        if (!$this->canEditCodes($o)) {
+            abort(403);
+        }
+
+        $data = $request->validate(['codigo' => ['required', 'string', 'max:100']], [
+            'codigo.required' => 'Ingresa el código de registro.',
+        ]);
+
+        $f   = OrderFile::where('order_id', $o->id)->where('id', $file)->firstOrFail();
+        $old = (string) $f->registration_code;
+        if (trim($old) === trim($data['codigo'])) {
+            return response()->json($this->setRpta(1, 'Sin cambios', ['id' => $f->id, 'code' => $f->registration_code]));
+        }
+
+        DB::transaction(function () use ($f, $o, $user, $old, $data) {
+            $f->update(['registration_code' => $data['codigo'], 'updated_by' => $user->id]);
+            $ref = trim(($f->serie ? $f->serie . '-' : '') . $f->document_number);
+            OrderEvent::create([
+                'order_id'       => $o->id,
+                'order_quota_id' => null,
+                'event_type'     => 'edit_codigo_registro',
+                'description'    => "Código de registro del comprobante {$ref}: '" . ($old !== '' ? $old : '—') . "' → '{$data['codigo']}'",
+                'created_by'     => $user->id,
+                'updated_by'     => $user->id,
+            ]);
+        });
+
+        return response()->json($this->setRpta(1, 'Código de registro actualizado', ['id' => $f->id, 'code' => $f->registration_code]));
+    }
+
+    /**
+     * Quien cierra el flujo (UC3 urgente / UC4 general) corrige el CÓDIGO DE BANCO de un
+     * abono antes de cerrar (estado 92). Queda registrado en orders_events.
+     */
+    public function editBankCode(Request $request, $order, $quota)
+    {
+        $o    = Order::with('paymentSchedule')->findOrFail($order);
+        $user = auth()->user();
+        if (!$this->canEditCodes($o)) {
+            abort(403);
+        }
+
+        $data = $request->validate(['codigo' => ['required', 'string', 'max:100']], [
+            'codigo.required' => 'Ingresa el código de banco.',
+        ]);
+
+        $q   = OrderQuota::where('order_id', $o->id)->where('id', $quota)->firstOrFail();
+        $old = (string) $q->codigo_banco;
+        if (trim($old) === trim($data['codigo'])) {
+            return response()->json($this->setRpta(1, 'Sin cambios', ['id' => $q->id, 'code' => $q->codigo_banco]));
+        }
+
+        DB::transaction(function () use ($q, $o, $user, $old, $data) {
+            $q->update(['codigo_banco' => $data['codigo'], 'codigo_banco_date' => now(), 'updated_by' => $user->id]);
+            OrderEvent::create([
+                'order_id'       => $o->id,
+                'order_quota_id' => $q->id,
+                'event_type'     => 'edit_codigo_banco',
+                'description'    => "Código de banco de Cuota {$q->quota_number}: '" . ($old !== '' ? $old : '—') . "' → '{$data['codigo']}'",
+                'created_by'     => $user->id,
+                'updated_by'     => $user->id,
+            ]);
+        });
+
+        return response()->json($this->setRpta(1, 'Código de banco actualizado', ['id' => $q->id, 'code' => $q->codigo_banco]));
+    }
+
+    /** Observa un abono: regresa a [200] PENDIENTE_POR_DEPOSITO para rehacer todo el proceso. AA urgente · UC2 general. */
     public function abonoObserve(Request $request, $quota)
     {
         $q    = OrderQuota::with('order.paymentSchedule')->findOrFail($quota);
@@ -2047,9 +2270,18 @@ class OrderController extends Controller
         $data = $request->validate(['observacion' => ['required', 'string']]);
 
         DB::transaction(function () use ($q, $user, $data, $o, $urg) {
+            // Regresa a [200]: el GF vuelve a elegir la cuenta de origen y se sube una nueva
+            // constancia (trazabilidad completa), en vez de asumir la misma cuenta del depósito.
             $q->update([
-                'status' => 201, 'monto_ok' => false, 'rebote' => true,
+                'status' => 200, 'monto_ok' => false, 'rebote' => true,
                 'observacion' => $data['observacion'], 'updated_by' => $user->id,
+                // Reset del depósito (se re-selecciona la cuenta de origen)
+                'source_company_id' => null, 'source_bank' => null, 'source_account_number' => null,
+                'source_cci' => null, 'source_currency' => null, 'deposit_date' => null,
+                // Reset de la constancia/voucher (se sube uno nuevo)
+                'constancia' => null, 'constancia_date' => null, 'operation_number' => null,
+                // El código de banco previo deja de ser válido.
+                'codigo_banco' => null, 'codigo_banco_date' => null,
             ]);
 
             // Histórico: queda registrada la observación (no se pierde al subsanar)
@@ -2062,10 +2294,11 @@ class OrderController extends Controller
                 'updated_by'     => $user->id,
             ]);
 
-            // General: si la orden ya estaba en [55], regresa a [102] (falta completar abonos)
+            // General: si la orden ya estaba en [55], regresa a [102] (falta completar abonos).
+            // El abono vuelve a [200], así que el siguiente actor es el GF (re-depositar).
             if (!$urg && (int) $o->status === 55) {
                 OrderHistory::create([
-                    'from_user' => $user->user_type, 'to_user' => 'AF',
+                    'from_user' => $user->user_type, 'to_user' => 'GF',
                     'from_status' => 55, 'to_status' => 102,
                     'coment' => 'Abono observado: ' . $data['observacion'], 'order_id' => $o->id,
                     'created_by' => $user->id, 'updated_by' => $user->id,
@@ -2114,20 +2347,24 @@ class OrderController extends Controller
         // Accesible en pasos de Código (Registro/Banco) o en el Cierre del flujo (UC3/UC4).
         $isCode  = (bool) $acts['code'];
         $isClose = (bool) $acts['close'];
-        if (!$isCode && !$isClose) {
+        $isConform = (bool) $acts['conform'];     // UC2 general @55: conformidad final (no pide código)
+        if (!$isCode && !$isClose && !$isConform) {
             abort(403);
         }
 
-        $codeMode  = $acts['codeMode'];          // 'perdoc' (Registro) | 'single' (Banco) | null
+        $codeMode  = $acts['codeMode'];          // 'perdoc' (Registro/Banco por documento) | 'single' | null
         $codeLabel = $acts['codeLabel'];         // "Código de Registro" | "Código de Banco"
+        $codeField = $acts['codeField'];         // 'codigo_registro' | 'codigo_banco'
         $closeLabel = $acts['approveLabel'];     // "Cerrar"
+        $conformLabel = $acts['conformLabel'];   // "Dar conformidad"
+        $canEditCodes = (bool) $acts['editCodes'];   // UC3/UC4 @92: editar códigos antes de cerrar
 
         $vm          = $this->orderSummaryData($order);
         $observe     = $this->observeTarget($o) !== null;
-        $obsTypes    = Master::where('main', 20)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
+        $obsTypes    = Master::where('main', 52)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
         $statusLabel = Status::find($o->status)?->description ?? $o->status;
 
-        return view('Orders.vistacontable', compact('o', 'vm', 'acts', 'observe', 'obsTypes', 'statusLabel', 'codeMode', 'codeLabel', 'isCode', 'isClose', 'closeLabel'));
+        return view('Orders.vistacontable', compact('o', 'vm', 'acts', 'observe', 'obsTypes', 'statusLabel', 'codeMode', 'codeLabel', 'codeField', 'isCode', 'isClose', 'closeLabel', 'isConform', 'conformLabel', 'canEditCodes'));
     }
 
     /**
@@ -2254,7 +2491,9 @@ class OrderController extends Controller
             ])->values(),
             // Comprobantes de pago (tienen N° de documento o monto) vs documentos anexos
             'comprobantes' => $o->files->filter(fn ($f) => $f->document_number || $f->amount)->map(fn ($f) => [
+                'id'           => $f->id,
                 'tipo'         => $voucherLabels[$f->type_file] ?? ($f->type_file ?? '—'),
+                'serie'        => $f->serie ?: '—',
                 'numero'       => $f->document_number ?: '—',
                 'monto'        => ($f->amount !== null && $f->amount !== '') ? $fmt($f->amount) : '—',
                 'fecha'        => $f->emission_date ? \Carbon\Carbon::parse($f->emission_date)->format('d/m/Y') : '—',
@@ -2262,25 +2501,27 @@ class OrderController extends Controller
                 'comentario'   => $f->comentario ?: null,
                 'subida'       => $f->created_at ? \Carbon\Carbon::parse($f->created_at)->format('d/m/Y H:i') : '—',
                 'uploader'     => $uploaderNames[$f->created_by] ?? '—',
-                'path'         => $f->path ? asset('storage/' . $f->path) : null,
+                'path'         => $f->path ? FileStorage::url($f->path) : null,
             ])->values(),
             'anexos' => $o->files->reject(fn ($f) => $f->document_number || $f->amount)->map(fn ($f) => [
                 'tipo'       => $attachLabels[$f->type_file] ?? ($f->type_file ?? '—'),
                 'comentario' => $f->comentario ?: '—',
                 'subida'     => $f->created_at ? \Carbon\Carbon::parse($f->created_at)->format('d/m/Y H:i') : '—',
                 'uploader'   => $uploaderNames[$f->created_by] ?? '—',
-                'path'       => $f->path ? asset('storage/' . $f->path) : null,
+                'path'       => $f->path ? FileStorage::url($f->path) : null,
             ])->values(),
             'cuotas' => $o->quotas->sortBy('quota_number')->map(fn ($q) => [
+                'id'         => $q->id,
                 'numero'     => $q->quota_number,
                 'fecha'      => $q->due_date ? \Carbon\Carbon::parse($q->due_date)->format('d/m/Y') : '—',
                 'monto'      => $fmt($q->amount),
                 'estado'     => [200 => 'Pendiente', 201 => 'Depositado', 202 => 'Constancia adjuntada'][$q->status] ?? $q->status,
                 'estado_id'  => (int) $q->status,
-                'constancia' => $q->constancia ? asset('storage/' . $q->constancia) : null,
+                'constancia' => $q->constancia ? FileStorage::url($q->constancia) : null,
                 'const_fecha' => $q->constancia_date ? \Carbon\Carbon::parse($q->constancia_date)->format('d/m/Y H:i') : null,
                 'operacion'  => $q->operation_number,
                 'subido_por' => $constanciaUploaders[$q->id] ?? '—',
+                'codigo_banco' => $q->codigo_banco ?: null,
             ])->values(),
         ];
     }
@@ -2301,10 +2542,11 @@ class OrderController extends Controller
                 'id'                => $f->id,
                 'type_label'        => $labels[$f->type_file] ?? $f->type_file,
                 'document_number'   => $f->document_number,
+                'serie'             => $f->serie,
                 'amount'            => number_format((float) $f->amount, 2),
                 'emission_date'     => $f->emission_date,
                 'comentario'        => $f->comentario,
-                'path'              => $f->path ? asset('storage/' . $f->path) : null,
+                'path'              => $f->path ? FileStorage::url($f->path) : null,
                 'registration_code' => $f->registration_code,
                 'has_retention'     => $f->has_retention,
             ])->values();
@@ -2324,7 +2566,7 @@ class OrderController extends Controller
                 'id'         => $f->id,
                 'type_label' => $labels[$f->type_file] ?? $f->type_file,
                 'comentario' => $f->comentario,
-                'path'       => $f->path ? asset('storage/' . $f->path) : null,
+                'path'       => $f->path ? FileStorage::url($f->path) : null,
             ])->values();
 
         return response()->json($this->setRpta(1, 'OK', $list));
@@ -2342,11 +2584,16 @@ class OrderController extends Controller
         $data = $request->validate([
             'type_file'       => ['required'],
             'document_number' => ['required', 'string', 'max:100'],
+            'serie'           => ['required', 'string', 'max:50'],
             'amount'          => ['required', 'numeric'],
             'emission_date'   => ['required', 'date'],
             'has_retention'   => ['nullable'],
             'comentario'      => ['nullable', 'string', 'max:500'],
-            'file'            => ['required', 'file', 'max:10240'],
+            'file'            => ['required', 'file', 'mimes:pdf', 'max:3072'],   // comprobante de pago: solo PDF, máx 3 MB
+        ], [
+            'serie.required' => 'Indica la serie del comprobante.',
+            'file.mimes' => 'El comprobante de pago debe ser un archivo PDF.',
+            'file.max'   => 'El comprobante de pago no puede superar los 3 MB.',
         ]);
 
         $rules    = $this->docRules();
@@ -2355,12 +2602,13 @@ class OrderController extends Controller
         OrderFile::create([
             'type_file'       => $data['type_file'],
             'document_number' => $data['document_number'],
+            'serie'           => $data['serie'] ?? null,
             'amount'          => $data['amount'],
             'emission_date'   => $data['emission_date'],
             'has_retention'   => $esRecibo ? $request->boolean('has_retention') : null,
             'comentario'      => $data['comentario'] ?? null,
             'order_id'        => $o->id,
-            'path'            => $request->file('file')->store('orders/vouchers', 'public'),
+            'path'            => FileStorage::put($request->file('file'), 'orders/vouchers'),
             'principal'       => 1,
             'created_by'      => $user->id, 'updated_by' => $user->id,
         ]);
@@ -2387,7 +2635,7 @@ class OrderController extends Controller
             'type_file'  => $data['type_file'],
             'comentario' => $data['comentario'] ?? null,
             'order_id'   => $o->id,
-            'path'       => $request->file('file')->store('orders/docs', 'public'),
+            'path'       => FileStorage::put($request->file('file'), 'orders/docs'),
             'principal'  => 0,
             'created_by' => $user->id, 'updated_by' => $user->id,
         ]);
@@ -2485,12 +2733,14 @@ class OrderController extends Controller
         }
 
         $current = (int) $o->status;
+        // Detalle para la línea de tiempo: los códigos reales, separados por comas.
+        $codigos = $comprobantes->pluck('registration_code')->filter()->implode(', ');
 
-        DB::transaction(function () use ($o, $user, $current, $t) {
+        DB::transaction(function () use ($o, $user, $current, $t, $codigos) {
             OrderHistory::create([
                 'from_user' => $user->user_type, 'to_user' => $t['to'],
                 'from_status' => $current, 'to_status' => $t['next'],
-                'coment' => $t['codeLabel'] . ' asignado por documento', 'order_id' => $o->id,
+                'coment' => $t['codeLabel'] . ': ' . $codigos, 'order_id' => $o->id,
                 'created_by' => $user->id, 'updated_by' => $user->id,
             ]);
             $o->update(['status' => $t['next'], 'updated_by' => $user->id]);

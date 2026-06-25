@@ -6,20 +6,20 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Almacenamiento de archivos del módulo de Requerimientos.
+ * Almacenamiento de archivos de la app (Órdenes y Requerimientos).
  *
- * El disco se decide por config('filesystems.refund_disk') (env REFUND_DISK):
- *   - dev: 'public'  (local, se ve por /storage)
- *   - prod: 'spaces' (DigitalOcean, archivos privados → URL temporal firmada)
+ * El disco se decide por config('filesystems.files_disk') (env FILES_DISK):
+ *   - dev:  'public'  (local, se ve por /storage)
+ *   - prod: 'spaces'  (DigitalOcean, archivos privados → URL temporal firmada)
  *
- * Se guarda solo la ruta relativa en la BD; aquí se resuelve la URL según el disco.
+ * En BD se guarda solo la ruta relativa; aquí se resuelve la URL según el disco.
  */
-class RefundStorage
+class FileStorage
 {
-    /** Disco configurado para los archivos de Requerimientos. */
+    /** Disco configurado para los archivos. */
     public static function disk(): string
     {
-        return config('filesystems.refund_disk', 'public');
+        return config('filesystems.files_disk', 'public');
     }
 
     /** Sube el archivo y devuelve la ruta relativa a guardar en BD. */
@@ -29,7 +29,7 @@ class RefundStorage
     }
 
     /** URL para abrir el archivo. En discos privados (Spaces) es temporal y firmada. */
-    public static function url(?string $path, int $minutes = 15): ?string
+    public static function url(?string $path, int $minutes = 30): ?string
     {
         if (!$path) {
             return null;

@@ -11,6 +11,17 @@ use Illuminate\Support\Facades\DB;
 
 class SupplierController extends Controller
 {
+    /** El módulo de Proveedores es exclusivo de AA y GA. */
+    public function __construct()
+    {
+        $this->middleware(function ($request, $next) {
+            if (!in_array(auth()->user()?->user_type, ['AA', 'GA'], true)) {
+                abort(403);
+            }
+            return $next($request);
+        });
+    }
+
     /** Listado de proveedores. */
     public function index()
     {

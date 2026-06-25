@@ -9,7 +9,7 @@ class Order extends Model
 {
     protected $fillable = [
         'company_id', 'code', 'status', 'title', 'type_id', 'format_id',
-        'user_responsible', 'payment_schedule_id', 'motive_cancelation', 'motive_observation',
+        'user_responsible', 'payment_schedule_id',
         'created_by', 'updated_by',
     ];
 

@@ -412,6 +412,17 @@
         <div class="card-body">
             <div class="grid-4">
                 <div class="form-group">
+                    <label class="form-label">Programación <span class="required">*</span>
+                        @if ($scheduleLocked ?? false)<small style="color:var(--text-muted);font-weight:500">· no editable (orden ya aprobada)</small>@endif
+                    </label>
+                    <select name="payment_schedule_id" id="payment_schedule_id" class="form-control searchable" required @disabled($scheduleLocked ?? false)>
+                        <option value="">Seleccione...</option>
+                        @foreach ($schedules as $id => $name)
+                            <option value="{{ $id }}">{{ $name }}</option>
+                        @endforeach
+                    </select>
+                </div>
+                <div class="form-group">
                     <label class="form-label">Forma de pago <span class="required">*</span></label>
                     <select name="payment_id" class="form-control searchable" required>
                         <option value="">Seleccione...</option>
@@ -432,17 +443,6 @@
                 <div class="form-group">
                     <label class="form-label">Fecha de vencimiento <span class="required" id="venc-req" style="display:none">*</span></label>
                     <input type="date" name="expiration_date" class="form-control" @unless ($isEdit) min="{{ now()->toDateString() }}" @endunless>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Programación <span class="required">*</span>
-                        @if ($scheduleLocked ?? false)<small style="color:var(--text-muted);font-weight:500">· no editable (orden ya aprobada)</small>@endif
-                    </label>
-                    <select name="payment_schedule_id" class="form-control searchable" required @disabled($scheduleLocked ?? false)>
-                        <option value="">Seleccione...</option>
-                        @foreach ($schedules as $id => $name)
-                            <option value="{{ $id }}">{{ $name }}</option>
-                        @endforeach
-                    </select>
                 </div>
             </div>
 
@@ -485,7 +485,7 @@
             </div>
             <div class="table-responsive" style="margin-bottom:20px">
                 <table class="table">
-                    <thead><tr><th>Tipo</th><th>N° Documento</th><th>Monto</th><th>Emisión</th><th>Comentario</th><th>Archivo</th><th></th></tr></thead>
+                    <thead><tr><th>Tipo</th><th>Serie</th><th>N° Documento</th><th>Monto</th><th>Emisión</th><th>Comentario</th><th>Archivo</th><th></th></tr></thead>
                     <tbody id="comprobantes-body">
                         <tr id="comprobantes-empty"><td colspan="7" style="padding:14px;text-align:center;color:var(--text-muted);font-style:italic">Sin comprobantes.</td></tr>
                     </tbody>
@@ -583,18 +583,21 @@
                 </div>
             </div>
             <div class="grid-2">
-                <div class="form-group"><label class="form-label">N.° de documento <span class="required">*</span></label><input id="cb_docnum" class="form-control" placeholder="F001-00012345"></div>
-                <div class="form-group"><label class="form-label">Monto <span class="required">*</span></label><input id="cb_amount" type="number" step="0.01" min="0" class="form-control"></div>
+                <div class="form-group"><label class="form-label">Serie <span class="required">*</span></label><input id="cb_serie" class="form-control" maxlength="50" placeholder="F001"></div>
+                <div class="form-group"><label class="form-label">N.° de documento <span class="required">*</span></label><input id="cb_docnum" class="form-control" placeholder="00012345"></div>
             </div>
-            <div class="form-group"><label class="form-label">Fecha de emisión <span class="required">*</span></label><input id="cb_date" type="date" class="form-control"></div>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">Monto <span class="required">*</span></label><input id="cb_amount" type="number" step="0.01" min="0" class="form-control"></div>
+                <div class="form-group"><label class="form-label">Fecha de emisión <span class="required">*</span></label><input id="cb_date" type="date" class="form-control"></div>
+            </div>
             <div class="form-group"><label class="form-label">Comentario</label><input id="cb_coment" class="form-control" maxlength="500" placeholder="Opcional"></div>
             <div class="form-group" style="margin-bottom:0">
-                <label class="form-label">Archivo (PDF/imagen) <span class="required">*</span></label>
+                <label class="form-label">Archivo (solo PDF) <span class="required">*</span></label>
                 <label class="dropzone dz-compact" id="cb_dz" for="cb_file">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 21V9M6 13l6-6 6 6"/><path d="M3 3h18"/></svg>
                     <div class="hint">Suelta el archivo o haz clic para buscar</div>
-                    <div class="sub">PDF, JPG, PNG · máx. 10 MB</div>
-                    <input type="file" id="cb_file" accept="application/pdf,image/*" style="display:none">
+                    <div class="sub">Solo PDF · máx. 3 MB</div>
+                    <input type="file" id="cb_file" accept="application/pdf" style="display:none">
                 </label>
             </div>
         </div>
@@ -1344,28 +1347,32 @@ document.addEventListener('click', (e) => {
         addBtnId: 'btn-add-comprobante', saveBtnId: 'cb-save', modalId: 'modal-comprobante',
         fileId: 'cb_file', dzId: 'cb_dz', name: 'comprobantes', successMsg: 'Comprobante agregado',
         resetFields() {
-            ['cb_type','cb_docnum','cb_amount','cb_date','cb_coment'].forEach(id => document.getElementById(id).value = '');
+            ['cb_type','cb_serie','cb_docnum','cb_amount','cb_date','cb_coment'].forEach(id => document.getElementById(id).value = '');
             document.getElementById('cb_retencion').checked = false;
             document.getElementById('cb_retencion_wrap').style.display = 'none';
         },
         collect() {
             const t = document.getElementById('cb_type');
             const type = t.value, label = type ? t.options[t.selectedIndex].text : '';
+            const serie  = document.getElementById('cb_serie').value.trim();
             const docnum = document.getElementById('cb_docnum').value.trim();
             const amount = document.getElementById('cb_amount').value;
             const date   = document.getElementById('cb_date').value;
             const coment = document.getElementById('cb_coment').value.trim();
             const file   = document.getElementById('cb_file').files[0];
-            if (!type || !docnum || !amount || !date) { showToast('Completa tipo, N° documento, monto y fecha.', 'warning'); return null; }
+            if (!type || !serie || !docnum || !amount || !date) { showToast('Completa tipo, serie, N° documento, monto y fecha.', 'warning'); return null; }
             if (!file) { showToast('Adjunta el archivo del comprobante.', 'warning'); return null; }
+            if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) { showToast('El comprobante de pago debe ser un archivo PDF.', 'warning'); return null; }
+            if (file.size > 3 * 1024 * 1024) { showToast('El comprobante no puede superar los 3 MB.', 'warning'); return null; }
             const esRecibo = window.DOC_RULES && String(type) === String(window.DOC_RULES.recibo);
             const has_retention = esRecibo && document.getElementById('cb_retencion').checked;
-            return { type, label, docnum, amount, date, coment, has_retention };
+            return { type, label, serie, docnum, amount, date, coment, has_retention };
         },
         hiddenInputs(i, d) {
             return `
                 <input type="hidden" name="comprobantes[${i}][type_file]" value="${esc(d.type)}">
                 <input type="hidden" name="comprobantes[${i}][type_file_label]" value="${esc(d.label)}">
+                <input type="hidden" name="comprobantes[${i}][serie]" value="${esc(d.serie)}">
                 <input type="hidden" name="comprobantes[${i}][document_number]" value="${esc(d.docnum)}">
                 <input type="hidden" name="comprobantes[${i}][amount]" value="${esc(d.amount)}">
                 <input type="hidden" name="comprobantes[${i}][emission_date]" value="${esc(d.date)}">
@@ -1375,6 +1382,7 @@ document.addEventListener('click', (e) => {
         rowHtml(i, d, fileName) {
             return `
                 <td>${esc(d.label)}</td>
+                <td class="cell-mono">${d.serie ? esc(d.serie) : '—'}</td>
                 <td class="cell-mono">${esc(d.docnum)}</td>
                 <td class="cell-strong">${parseFloat(d.amount).toFixed(2)}</td>
                 <td>${esc(d.date)}</td>
@@ -1385,11 +1393,12 @@ document.addEventListener('click', (e) => {
         existingRowHtml(d) {
             return `
                 <td>${esc(d.type_file_label)}</td>
+                <td class="cell-mono">${d.serie ? esc(d.serie) : '—'}</td>
                 <td class="cell-mono">${esc(d.document_number)}</td>
                 <td class="cell-strong">${d.amount != null ? parseFloat(d.amount).toFixed(2) : '—'}</td>
                 <td>${esc(d.emission_date ?? '')}</td>
                 <td>${d.comentario ? esc(d.comentario) : '—'}</td>
-                <td>${d.path ? `<a href="/storage/${esc(d.path)}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
+                <td>${d.path ? `<a href="${esc(d.path)}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
                 <td style="text-align:center"><button type="button" class="btn-remove rm-existing" title="Quitar">×</button></td>`;
         },
     });
@@ -1426,7 +1435,7 @@ document.addEventListener('click', (e) => {
             return `
                 <td>${esc(d.type_label)}</td>
                 <td>${d.comentario ? esc(d.comentario) : '—'}</td>
-                <td>${d.path ? `<a href="/storage/${esc(d.path)}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
+                <td>${d.path ? `<a href="${esc(d.path)}" target="_blank" style="color:var(--primary)">Ver</a>` : '—'}</td>
                 <td style="text-align:center"><button type="button" class="btn-remove rm-existing" title="Quitar">×</button></td>`;
         },
     });
@@ -1939,6 +1948,42 @@ document.addEventListener('click', (e) => {
         });
     }
 })();
+</script>
+
+<script>
+// ── Programación Urgente → la condición solo puede ser "Al Contado" ──
+document.addEventListener('DOMContentLoaded', function () {
+    const schedSel = document.getElementById('payment_schedule_id');
+    const condSel  = document.getElementById('condition_payment');
+    if (!schedSel || !condSel) return;
+
+    // Id de "Al Contado" = la condición que NO está en FRACCIONADO_IDS.
+    const fracc = (window.FRACCIONADO_IDS || []).map(String);
+    const CONTADO_ID = [...condSel.options].map(o => o.value).find(v => v && !fracc.includes(String(v))) || '';
+
+    const isUrgente = () => {
+        const opt = schedSel.options[schedSel.selectedIndex];
+        return opt ? /urgente/i.test(opt.text) : false;
+    };
+
+    function applyRestriction() {
+        if (window.RESTRICTED) return;   // en edición restringida la condición ya está bloqueada
+        if (isUrgente()) {
+            // Forzar "Al Contado" y bloquear el combo (el <select> nativo sigue enviando su valor).
+            if (condSel.value !== CONTADO_ID) {
+                condSel.value = CONTADO_ID;
+                condSel.dispatchEvent(new Event('change'));   // re-aplica reglas de cuotas/vencimiento
+            }
+            condSel.__ss && condSel.__ss.refresh();
+            condSel.__ss && condSel.__ss.setDisabled(true);
+        } else {
+            condSel.__ss && condSel.__ss.setDisabled(false);
+        }
+    }
+
+    schedSel.addEventListener('change', applyRestriction);
+    applyRestriction();   // estado inicial (creación / edición con programación preseleccionada)
+});
 </script>
 
 @if ($isEdit && (($acts['observe'] ?? false) || ($acts['reject'] ?? false)))

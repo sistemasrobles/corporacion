@@ -133,8 +133,10 @@
                             <th>Vencimiento</th>
                             <th>Estado abono</th>
                             <th>Observación</th>
+                            <th>Empresa origen</th>
                             <th>Banco origen</th>
                             <th>Cuenta origen</th>
+                            <th>Moneda</th>
                             <th>N° Operación</th>
                             <th>Constancia</th>
                             <th></th>
@@ -199,24 +201,19 @@
                     <div class="ci-item"><span class="ci-l">Vencimiento</span><span class="ci-v" data-fld="due">—</span></div>
                     <div class="ci-item" style="grid-column:span 2"><span class="ci-l">Programación</span><span class="ci-v" data-fld="sched">—</span></div>
                 </div>
-                <label class="form-label">Cuenta de origen — ¿desde qué empresa sale el dinero? <span class="required">*</span></label>
+                <label class="form-label">Cuenta de origen — ¿desde qué cuenta sale el dinero? <span class="required">*</span></label>
                 <div id="dep-accounts" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
-                    @forelse ($companies as $co)
-                        @php $hasAcc = (bool) $co->source_account_number; @endphp
-                        <label class="dep-acc {{ $hasAcc ? '' : 'dep-acc-off' }}">
-                            <input type="radio" name="dep-company" value="{{ $co->id }}" {{ $hasAcc ? '' : 'disabled' }}>
+                    @forelse ($companyAccounts as $acc)
+                        <label class="dep-acc">
+                            <input type="radio" name="dep-account" value="{{ $acc->id }}">
                             <span class="dep-acc-body">
-                                <span class="dep-acc-name">{{ $co->name }}</span>
-                                @if ($hasAcc)
-                                    <span class="dep-acc-meta">{{ $co->source_bank ?: 'Banco no especificado' }} · Cta. {{ $co->source_account_number }}@if ($co->source_cci) · CCI {{ $co->source_cci }}@endif</span>
-                                @else
-                                    <span class="dep-acc-meta" style="color:var(--red)">Sin cuenta bancaria registrada</span>
-                                @endif
+                                <span class="dep-acc-name">{{ $acc->company->name ?? '—' }} <span style="font-weight:400;color:var(--text-muted)">· {{ $acc->currency }}</span></span>
+                                <span class="dep-acc-meta">{{ $acc->bank ?: 'Banco no especificado' }} · Cta. {{ $acc->account_number }}@if ($acc->cci) · CCI {{ $acc->cci }}@endif</span>
                             </span>
                         </label>
                     @empty
                         <div style="padding:14px;border:1px dashed var(--border-color);border-radius:var(--radius);color:var(--text-muted);font-size:13px;font-style:italic">
-                            No hay empresas con datos bancarios registrados.
+                            No hay cuentas de empresa registradas.
                         </div>
                     @endforelse
                 </div>
@@ -244,6 +241,26 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline" data-close="modal-abono-obs">Cancelar</button>
                 <button type="button" id="abobs-save" class="btn btn-primary">Enviar observación</button>
+            </div>
+        </div>
+    </div>
+
+    {{-- ── MODAL: Registrar código de banco por abono (UC2 general) ── --}}
+    <div class="modal-backdrop" id="modal-bankcode" style="display:none">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-header" style="background:var(--text);border-bottom:none">
+                <h3 class="modal-title" style="color:#fff">Código de banco <span id="bc-info" style="opacity:.7;font-weight:400"></span></h3>
+                <button type="button" class="modal-close" data-close="modal-bankcode" style="color:rgba(255,255,255,.7)">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group" style="margin-bottom:0">
+                    <label class="form-label">Código de banco <span class="required">*</span></label>
+                    <input type="text" id="bc-input" class="form-control" maxlength="100" placeholder="Ej. BCO-2026-00045">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" data-close="modal-bankcode">Cancelar</button>
+                <button type="button" id="bc-save" class="btn btn-primary">Guardar código</button>
             </div>
         </div>
     </div>
@@ -507,7 +524,7 @@
             currentId = dep.dataset.id;
             document.getElementById('dep-info').textContent = `${dep.dataset.code} · Cuota ${dep.dataset.num}`;
             fillCuotaInfo('dep-cuota-info', dep);
-            document.querySelectorAll('input[name="dep-company"]').forEach(r => { r.checked = false; });
+            document.querySelectorAll('input[name="dep-account"]').forEach(r => { r.checked = false; });
             openM('modal-deposit');
             return;
         }
@@ -529,16 +546,19 @@
 
         const obs = e.target.closest('.ab-observe');
         if (obs) { currentId = obs.dataset.id; document.getElementById('abobs-info').textContent = `${obs.dataset.code} · Cuota ${obs.dataset.num}`; document.getElementById('abobs-reason').value = ''; openM('modal-abono-obs'); return; }
+
+        const bc = e.target.closest('.ab-bankcode');
+        if (bc) { currentId = bc.dataset.id; document.getElementById('bc-info').textContent = `${bc.dataset.code} · Cuota ${bc.dataset.num}`; document.getElementById('bc-input').value = ''; openM('modal-bankcode'); setTimeout(() => document.getElementById('bc-input').focus(), 50); return; }
     });
 
     // Registrar depósito (cuenta de origen)
     document.getElementById('dep-save').addEventListener('click', async function () {
-        const sel = document.querySelector('input[name="dep-company"]:checked');
+        const sel = document.querySelector('input[name="dep-account"]:checked');
         if (!sel) { showToast('Selecciona la cuenta de origen.', 'warning'); return; }
         this.disabled = true; this.textContent = 'Registrando...';
         const r = await post(`${BASE}/${currentId}/deposit`, {
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ source_company_id: sel.value }),
+            body: JSON.stringify({ source_account_id: sel.value }),
         });
         if (!done(r, 'No se pudo registrar el depósito.')) { this.disabled = false; this.textContent = 'Confirmar depósito'; }
     });
@@ -562,6 +582,15 @@
         this.disabled = true; this.textContent = 'Enviando...';
         const r = await post(`${BASE}/${currentId}/observe`, { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ observacion: reason }) });
         if (!done(r, 'No se pudo observar.')) { this.disabled = false; this.textContent = 'Enviar observación'; }
+    });
+
+    // Registrar código de banco por abono (UC2 general)
+    document.getElementById('bc-save').addEventListener('click', async function () {
+        const codigo = document.getElementById('bc-input').value.trim();
+        if (!codigo) { showToast('Ingresa el código de banco.', 'warning'); return; }
+        this.disabled = true; this.textContent = 'Guardando...';
+        const r = await post(`${BASE}/${currentId}/bankcode`, { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codigo_banco: codigo }) });
+        if (!done(r, 'No se pudo guardar el código de banco.')) { this.disabled = false; this.textContent = 'Guardar código'; }
     });
 })();
 </script>

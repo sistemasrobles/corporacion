@@ -41,9 +41,12 @@
                 </button>
                 <div class="nav-sub">
                     <div class="nav-sub-inner">
+                        {{-- AF ya no tiene paso de flujo en Mis Órdenes (su conformidad urgente se eliminó): solo consulta Históricas. --}}
+                        @if ($rol !== 'AF')
                         <a href="{{ $href('orders.view') }}" class="nav-sublink {{ request()->routeIs('orders.view') ? 'active' : '' }}">
                             <span class="nav-text">Mis Órdenes</span>
                         </a>
+                        @endif
                         <a href="{{ $href('orders.history') }}" class="nav-sublink {{ request()->routeIs('orders.history') ? 'active' : '' }}">
                             <span class="nav-text">Órdenes Históricas</span>
                         </a>
@@ -74,8 +77,9 @@
             </div>
             @endif
 
-            {{-- Árbol: Requerimientos (roles del flujo) --}}
-            @if (in_array($rol, ['AA', 'GA', 'GF', 'AF', 'UC1'], true))
+            {{-- Árbol: Requerimientos — MÓDULO DESACTIVADO (el flujo cambió). Para reactivar:
+                 cambiar el `false` por: in_array($rol, ['AA', 'GA', 'GF', 'AF', 'UC1'], true) --}}
+            @if (false)
             <div class="nav-tree {{ $reqActivo ? 'open has-active' : '' }}">
                 <button type="button" class="nav-link nav-toggle">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
@@ -92,7 +96,8 @@
             </div>
             @endif
 
-            {{-- Árbol: Proveedores --}}
+            {{-- Árbol: Proveedores (solo AA y GA) --}}
+            @if (in_array($rol, ['AA', 'GA'], true))
             <div class="nav-tree {{ $provActivo ? 'open has-active' : '' }}">
                 <button type="button" class="nav-link nav-toggle">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
@@ -107,6 +112,7 @@
                     </div>
                 </div>
             </div>
+            @endif
 
         </div>
 

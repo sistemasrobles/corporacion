@@ -127,7 +127,7 @@
         </div>
     </div>
 
-    @php $sourceCompanies = $companies ?? collect(); @endphp
+    @php $accounts = $companyAccounts ?? collect(); @endphp
 
     {{-- Modal: registrar abono (GF) --}}
     <div class="modal-backdrop" id="modal-abono" style="display:none">
@@ -135,8 +135,8 @@
             <div class="modal-header" style="background:var(--text);border-bottom:none"><h3 class="modal-title" style="color:#fff">Registrar abono <span id="ab-code" style="opacity:.7;font-weight:400"></span></h3><button type="button" class="modal-close" data-close="modal-abono" style="color:rgba(255,255,255,.7)">×</button></div>
             <div class="modal-body">
                 <div id="ab-info" style="background:var(--bg-surface-secondary);border-radius:var(--radius);padding:10px 12px;margin-bottom:14px;font-size:13px"></div>
-                <div class="form-group"><label class="form-label">Empresa de origen <span class="required">*</span></label>
-                    <select id="ab-company" class="form-control"><option value="">Seleccione...</option>@foreach ($sourceCompanies as $co)<option value="{{ $co->id }}">{{ $co->name }} — {{ $co->source_bank }} {{ $co->source_account_number }}</option>@endforeach</select></div>
+                <div class="form-group"><label class="form-label">Cuenta de origen <span class="required">*</span></label>
+                    <select id="ab-company" class="form-control"><option value="">Seleccione...</option>@foreach ($accounts as $acc)<option value="{{ $acc->id }}">{{ $acc->company->name ?? '—' }} — {{ $acc->bank }} · {{ $acc->account_number }} ({{ $acc->currency }})</option>@endforeach</select></div>
                 <div class="form-group"><label class="form-label">Fecha de abono <span class="required">*</span></label><input type="date" id="ab-date" class="form-control" value="{{ now()->toDateString() }}"></div>
                 <div class="form-group" style="margin-bottom:0"><label class="form-label">N° de operación <span class="required">*</span></label><input type="text" id="ab-txn" class="form-control" maxlength="100"></div>
             </div>
@@ -170,8 +170,8 @@
             <div class="modal-header" style="background:var(--text);border-bottom:none"><h3 class="modal-title" style="color:#fff">Registrar reembolso <span id="re-code" style="opacity:.7;font-weight:400"></span></h3><button type="button" class="modal-close" data-close="modal-reem" style="color:rgba(255,255,255,.7)">×</button></div>
             <div class="modal-body">
                 <div id="re-info" style="background:var(--bg-surface-secondary);border-radius:var(--radius);padding:10px 12px;margin-bottom:14px;font-size:13px"></div>
-                <div class="form-group"><label class="form-label">Empresa de origen <span class="required">*</span></label>
-                    <select id="re-company" class="form-control"><option value="">Seleccione...</option>@foreach ($sourceCompanies as $co)<option value="{{ $co->id }}">{{ $co->name }} — {{ $co->source_bank }} {{ $co->source_account_number }}</option>@endforeach</select></div>
+                <div class="form-group"><label class="form-label">Cuenta de origen <span class="required">*</span></label>
+                    <select id="re-company" class="form-control"><option value="">Seleccione...</option>@foreach ($accounts as $acc)<option value="{{ $acc->id }}">{{ $acc->company->name ?? '—' }} — {{ $acc->bank }} · {{ $acc->account_number }} ({{ $acc->currency }})</option>@endforeach</select></div>
                 <div class="form-group"><label class="form-label">Fecha <span class="required">*</span></label><input type="date" id="re-date" class="form-control" value="{{ now()->toDateString() }}"></div>
                 <div class="form-group"><label class="form-label">N° de operación</label><input type="text" id="re-txn" class="form-control" maxlength="100"></div>
                 <div class="form-group" style="margin-bottom:0">
@@ -428,11 +428,11 @@
     // Confirm de los modales con archivos/datos
     $('ab-confirm').addEventListener('click', () => {
         if (!pending) return;
-        if (!$('ab-company').value)     { showToast('Selecciona la empresa de origen.', 'warning'); return; }
+        if (!$('ab-company').value)     { showToast('Selecciona la cuenta de origen.', 'warning'); return; }
         if (!$('ab-date').value)        { showToast('Indica la fecha de abono.', 'warning'); return; }
         if (!$('ab-txn').value.trim())  { showToast('Indica el N° de operación.', 'warning'); return; }
         closeM('modal-abono');
-        doAction(`${BASE}/${pending.id}/abono`, { source_company_id: $('ab-company').value, payment_date: $('ab-date').value, transaction_code: $('ab-txn').value.trim() });
+        doAction(`${BASE}/${pending.id}/abono`, { source_account_id: $('ab-company').value, payment_date: $('ab-date').value, transaction_code: $('ab-txn').value.trim() });
         pending = null;
     });
     $('co-confirm').addEventListener('click', () => {
@@ -447,11 +447,11 @@
     $('re-confirm').addEventListener('click', () => {
         if (!pending) return;
         const file = $('re-file').files[0];
-        if (!$('re-company').value) { showToast('Selecciona la empresa de origen.', 'warning'); return; }
+        if (!$('re-company').value) { showToast('Selecciona la cuenta de origen.', 'warning'); return; }
         if (!$('re-date').value)    { showToast('Indica la fecha.', 'warning'); return; }
         if (!file)                  { showToast('Adjunta la constancia.', 'warning'); return; }
         const fd = new FormData();
-        fd.append('source_company_id', $('re-company').value); fd.append('payment_date', $('re-date').value);
+        fd.append('source_account_id', $('re-company').value); fd.append('payment_date', $('re-date').value);
         fd.append('transaction_code', $('re-txn').value.trim()); fd.append('constancia', file);
         closeM('modal-reem');
         doAction(`${BASE}/${pending.id}/reembolso`, fd, true);

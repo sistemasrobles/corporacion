@@ -43,6 +43,10 @@ Route::middleware('auth')->group(function () {
         Route::post('/abono/{quota}/constancia', [OrderController::class, 'abonoConstancia'])->name('abono.constancia');
         Route::post('/abono/{quota}/verify', [OrderController::class, 'abonoVerify'])->name('abono.verify');
         Route::post('/abono/{quota}/observe', [OrderController::class, 'abonoObserve'])->name('abono.observe');
+        Route::post('/abono/{quota}/bankcode', [OrderController::class, 'abonoBankCode'])->name('abono.bankcode');
+        Route::post('/{order}/abono-bankcode-advance', [OrderController::class, 'advanceAbonoBankCode'])->name('abono.bankcode.advance');
+        Route::post('/{order}/edit-codigo-registro/{file}', [OrderController::class, 'editRegistrationCode'])->name('edit.codigo.registro');
+        Route::post('/{order}/edit-codigo-banco/{quota}', [OrderController::class, 'editBankCode'])->name('edit.codigo.banco');
         Route::get('/create', [OrderController::class, 'create'])->name('create');
         Route::post('/store', [OrderController::class, 'store'])->name('store');
         Route::post('/store-ja', [OrderController::class, 'storeJa'])->name('store-ja'); // Solicitud liviana del JA

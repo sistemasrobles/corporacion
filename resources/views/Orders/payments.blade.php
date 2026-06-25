@@ -101,8 +101,10 @@
                             <th style="text-align:right">Monto</th>
                             <th>Vencimiento</th>
                             <th>Fecha depósito</th>
+                            <th>Empresa origen</th>
                             <th>Banco origen</th>
                             <th>Cuenta origen</th>
+                            <th>Moneda</th>
                             <th>N° Operación</th>
                             <th data-orderable="false">Constancia</th>
                         </tr>

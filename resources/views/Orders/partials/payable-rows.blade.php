@@ -41,12 +41,15 @@
                 <span style="color:var(--text-muted)">—</span>
             @endif
         </td>
+        <td class="cell-strong">{{ $ab->sourceCompany?->name ?: '—' }}</td>
         <td class="cell-strong">{{ $ab->source_bank ?: '—' }}</td>
         <td class="cell-mono">{{ $ab->source_account_number ?: '—' }}</td>
+        <td class="cell-mono">{{ $ab->source_currency ?: '—' }}</td>
         <td class="cell-mono">{{ $ab->operation_number ?: '—' }}</td>
         <td>
             @if ($ab->constancia)
-                <a href="/storage/{{ $ab->constancia }}" class="constancia-link" data-url="/storage/{{ $ab->constancia }}" data-code="{{ $o->code }}" data-num="{{ $ab->quota_number }}" style="color:var(--primary)">Ver</a>
+                @php $cu = \App\Support\FileStorage::url($ab->constancia); @endphp
+                <a href="{{ $cu }}" class="constancia-link" data-url="{{ $cu }}" data-code="{{ $o->code }}" data-num="{{ $ab->quota_number }}" style="color:var(--primary)">Ver</a>
             @else
                 <span style="color:var(--text-muted)">—</span>
             @endif
@@ -70,6 +73,11 @@
             @if ($acts['observe'])
                 <button type="button" class="btn btn-outline btn-sm ab-observe" data-id="{{ $ab->id }}" data-code="{{ $o->code }}" data-num="{{ $ab->quota_number }}" title="Observar abono" style="color:#b45309">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                </button>
+            @endif
+            @if ($acts['bankcode'])
+                <button type="button" class="btn btn-outline btn-sm ab-bankcode" data-id="{{ $ab->id }}" data-code="{{ $o->code }}" data-num="{{ $ab->quota_number }}" title="Registrar código de banco" style="color:var(--primary)">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
                 </button>
             @endif
         </td>

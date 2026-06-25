@@ -14,10 +14,11 @@ use App\Models\RefundCategory;
 use App\Models\Beneficiary;
 use App\Models\BeneficiaryAccount;
 use App\Models\Company;
+use App\Models\CompanyAccount;
 use App\Models\Area;
 use App\Models\Master;
 use App\Models\User;
-use App\Support\RefundStorage;
+use App\Support\FileStorage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
@@ -26,6 +27,16 @@ class RefundController extends Controller
 {
     /** Roles que participan en el flujo de requerimientos (ven el módulo). */
     private const ROLES = ['AA', 'GA', 'GF', 'AF', 'UC1'];
+
+    /**
+     * MÓDULO DESACTIVADO — el flujo de requerimientos cambió y ya no se usa.
+     * El código y las tablas se conservan intactos; toda ruta responde 404.
+     * Para reactivar: eliminar este constructor.
+     */
+    public function __construct()
+    {
+        $this->middleware(fn ($request, $next) => abort(404));
+    }
 
     /** Listado de Órdenes de Requerimiento (vista única del módulo). */
     public function index()
@@ -38,13 +49,13 @@ class RefundController extends Controller
         $refunds   = $this->collectRefunds($user);
         $statuses  = RefundStatus::orderBy('id')->get(['id', 'name']);
         $canCreate = in_array($user->user_type, ['AA', 'GA'], true);   // AA crea las suyas; GA crea y asigna AA
-        $obsTypes  = Master::where('main', 20)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
-        // Empresas con cuenta de origen (modales de abono/reembolso del GF en la lista).
-        $companies = in_array($user->user_type, ['GF'], true)
-            ? Company::whereNotNull('source_account_number')->orderBy('name')->get(['id', 'name', 'source_bank', 'source_account_number'])
+        $obsTypes  = Master::where('main', 52)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
+        // Cuentas de origen (empresas) para los modales de abono/reembolso del GF.
+        $companyAccounts = $user->user_type === 'GF'
+            ? CompanyAccount::with('company:id,name')->orderBy('company_id')->orderByDesc('is_primary')->get()
             : collect();
 
-        return view('Requirements.index', compact('refunds', 'statuses', 'canCreate', 'obsTypes', 'companies'));
+        return view('Requirements.index', compact('refunds', 'statuses', 'canCreate', 'obsTypes', 'companyAccounts'));
     }
 
     /** Filas frescas del listado (botón Recargar). */
@@ -94,7 +105,7 @@ class RefundController extends Controller
             'banks'       => Master::where('main', 67)->whereNotNull('description')->orderBy('description')->pluck('description', 'id'),
             'voucherTypes' => Master::where('main', 15)->whereNotNull('description')->orderBy('description')->pluck('description', 'value'),
             'aaUsers'     => User::where('user_type', 'AA')->orderBy('name')->pluck('name', 'id'),   // responsables posibles (GA)
-            'obsTypes'    => Master::where('main', 20)->whereNotNull('description')->orderBy('value')->pluck('description', 'value'),
+            'obsTypes'    => Master::where('main', 52)->whereNotNull('description')->orderBy('value')->pluck('description', 'value'),
         ];
     }
 
@@ -427,7 +438,7 @@ class RefundController extends Controller
 
         // Tipos de comprobante (master main=15) y de observación (main=20).
         $voucherTypes = Master::where('main', 15)->whereNotNull('description')->orderBy('description')->pluck('description', 'value');
-        $obsTypes     = Master::where('main', 20)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
+        $obsTypes     = Master::where('main', 52)->whereNotNull('description')->orderBy('value')->pluck('description', 'value');
 
         return view('Requirements.show', compact(
             'refund', 'canReview', 'canEdit', 'canDeposit', 'canConstancia', 'canRender',
@@ -514,32 +525,29 @@ class RefundController extends Controller
         }
 
         $data = $request->validate([
-            'source_company_id' => ['required', 'exists:companies,id'],
+            'source_account_id' => ['required', 'exists:company_accounts,id'],
             'payment_date'      => ['required', 'date'],
             'transaction_code'  => ['required', 'string', 'max:100'],
         ], [
-            'transaction_code.required' => 'Indica el N° de operación del abono.',
+            'source_account_id.required' => 'Selecciona la cuenta de origen.',
+            'transaction_code.required'  => 'Indica el N° de operación del abono.',
         ]);
 
-        $company = Company::findOrFail($data['source_company_id']);
-        if (!$company->source_account_number) {
-            return response()->json($this->setRpta(0, 'La empresa seleccionada no tiene cuenta bancaria registrada.', null));
-        }
+        $account = CompanyAccount::with('company')->findOrFail($data['source_account_id']);
+        $amount  = $refund->approved_amount ?? $refund->requested_amount;
 
-        $amount = $refund->approved_amount ?? $refund->requested_amount;
-
-        DB::transaction(function () use ($refund, $user, $company, $data, $amount) {
+        DB::transaction(function () use ($refund, $user, $account, $data, $amount) {
             RefundPayment::create([
                 'refund_id'           => $refund->id,
                 'payment_type'        => 'ABONO_INICIAL',
                 'amount'              => $amount,
                 'payment_date'        => $data['payment_date'],
-                'bank_origin'         => $company->source_bank,
-                'account_origin'      => $company->source_account_number,
+                'bank_origin'         => $account->bank,
+                'account_origin'      => $account->account_number,
                 'bank_destination'    => $refund->beneficiary_bank,
                 'account_destination' => $refund->beneficiary_account,
                 'transaction_code'    => $data['transaction_code'] ?? null,
-                'notes'               => 'Abono inicial desde ' . $company->name,
+                'notes'               => 'Abono inicial desde ' . ($account->company->name ?? '—'),
                 'uploaded_by'         => $user->id,
                 'uploaded_at'         => now(),
             ]);
@@ -568,7 +576,7 @@ class RefundController extends Controller
         ]);
 
         $file = $request->file('constancia');
-        $path = RefundStorage::put($file, 'requirements/constancias');
+        $path = FileStorage::put($file, 'requirements/constancias');
 
         DB::transaction(function () use ($refund, $user, $file, $path) {
             // Adjunta el archivo al abono; el N° de operación ya quedó registrado al abonar.
@@ -638,7 +646,7 @@ class RefundController extends Controller
             'amount'          => $data['amount'],
             'issue_date'      => $data['issue_date'],
             'file_name'       => $file->getClientOriginalName(),
-            'file_path'       => RefundStorage::put($file, 'requirements/comprobantes'),
+            'file_path'       => FileStorage::put($file, 'requirements/comprobantes'),
             'file_size'       => $file->getSize(),
             'uploaded_by'     => $user->id,
             'uploaded_at'     => now(),
@@ -655,7 +663,7 @@ class RefundController extends Controller
             abort(404);
         }
         if ($file->file_path) {
-            RefundStorage::delete($file->file_path);
+            FileStorage::delete($file->file_path);
         }
         $file->delete();
 
@@ -718,33 +726,32 @@ class RefundController extends Controller
         }
 
         $data = $request->validate([
-            'source_company_id' => ['required', 'exists:companies,id'],
+            'source_account_id' => ['required', 'exists:company_accounts,id'],
             'payment_date'      => ['required', 'date'],
             'transaction_code'  => ['nullable', 'string', 'max:100'],
             'constancia'        => ['required', 'file', 'max:10240'],
+        ], [
+            'source_account_id.required' => 'Selecciona la cuenta de origen.',
         ]);
-        $company = Company::findOrFail($data['source_company_id']);
-        if (!$company->source_account_number) {
-            return response()->json($this->setRpta(0, 'La empresa seleccionada no tiene cuenta bancaria registrada.', null));
-        }
+        $account = CompanyAccount::with('company')->findOrFail($data['source_account_id']);
 
         $faltante = abs((float) $refund->difference_amount);
         $file     = $request->file('constancia');
 
-        DB::transaction(function () use ($refund, $user, $company, $data, $faltante, $file) {
+        DB::transaction(function () use ($refund, $user, $account, $data, $faltante, $file) {
             RefundPayment::create([
                 'refund_id'           => $refund->id,
                 'payment_type'        => 'REEMBOLSO_TRABAJADOR',
                 'amount'              => $faltante,
                 'payment_date'        => $data['payment_date'],
-                'bank_origin'         => $company->source_bank,
-                'account_origin'      => $company->source_account_number,
+                'bank_origin'         => $account->bank,
+                'account_origin'      => $account->account_number,
                 'bank_destination'    => $refund->beneficiary_bank,
                 'account_destination' => $refund->beneficiary_account,
                 'transaction_code'    => $data['transaction_code'] ?? null,
                 'file_name'           => $file->getClientOriginalName(),
-                'file_path'           => RefundStorage::put($file, 'requirements/reembolsos'),
-                'notes'               => 'Reembolso del faltante desde ' . $company->name,
+                'file_path'           => FileStorage::put($file, 'requirements/reembolsos'),
+                'notes'               => 'Reembolso del faltante desde ' . ($account->company->name ?? '—'),
                 'uploaded_by'         => $user->id,
                 'uploaded_at'         => now(),
             ]);
@@ -793,7 +800,7 @@ class RefundController extends Controller
             'account_destination' => $abono?->account_origin,
             'transaction_code'    => $data['transaction_code'] ?? null,
             'file_name'        => $file->getClientOriginalName(),
-            'file_path'        => RefundStorage::put($file, 'requirements/devoluciones'),
+            'file_path'        => FileStorage::put($file, 'requirements/devoluciones'),
             'notes'            => 'Devolución del sobrante a la empresa',
             'uploaded_by'      => $user->id,
             'uploaded_at'      => now(),
@@ -964,7 +971,7 @@ class RefundController extends Controller
     /** Antepone el tipo de observación (master main=20) al comentario: "[Falta de sustento] ...". */
     private function buildObsComment($obsType, string $comment): string
     {
-        $desc = Master::where('main', 20)->where('value', $obsType)->value('description');
+        $desc = Master::where('main', 52)->where('value', $obsType)->value('description');
         return $desc ? '[' . $desc . '] ' . $comment : $comment;
     }
 
